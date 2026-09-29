@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Город 24 — конструктор постов</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="__FAVICON__">
+<link rel="apple-touch-icon" href="__APPLE_TOUCH_ICON__">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Город 24">
+<meta name="format-detection" content="telephone=no">
+<script>
+// сохранённая тема — до отрисовки CSS, чтобы не мелькала не та
+try {
+  var t = localStorage.getItem('g24.theme.v1');
+  if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+} catch (e) { /* приватный режим — тема по системной настройке */ }
+</script>
+<style>
+__FONT_FACES__
+__CSS__
+</style>
+</head>
+<body>
+
+<div class="install-banner" id="installBanner" hidden>
+  <span id="installBannerText"></span>
+  <button type="button" class="btn btn-invert btn-sm" id="installBannerAction" hidden>Установить</button>
+  <button type="button" class="icon-btn" id="installBannerClose" aria-label="Скрыть" data-icon="x"></button>
+</div>
+
+<!-- ================================================== стартовый экран -->
+<main class="screen home" id="home" aria-label="Проекты">
+  <header class="home-head">
+    <div class="brand">
+      <span class="brand-logo" id="brandLogo" aria-hidden="true"></span>
+      <span class="brand-text">
+        <span class="brand-name">Конструктор постов</span>
+        <span class="brand-sub">обложки и карусели по макетам</span>
+      </span>
+    </div>
+    <div class="head-actions">
+      <button type="button" class="icon-btn" id="btnHelpHome" title="Как пользоваться" aria-label="Как пользоваться" data-icon="question"></button>
+      <button type="button" class="icon-btn theme-btn" id="btnThemeHome" title="Тёмная тема" aria-label="Тема" data-icon="moon"></button>
+    </div>
+  </header>
+
+  <div class="font-note" id="fontNoteHome" hidden></div>
+
+  <section class="drafts" id="draftsSection" hidden>
+    <div class="section-head">
+      <h2>Продолжить</h2>
+      <span class="muted small">Черновики и фото хранятся в этом браузере</span>
+    </div>
+    <div class="drafts-row" id="draftsRow"></div>
+  </section>
+
+  <section class="rubrics">
+    <div class="section-head">
+      <h2>Новый пост</h2>
+      <span class="muted small">Выберите рубрику — шрифты, отступы и логотип уже на месте</span>
+    </div>
+    <div class="rubric-grid" id="rubricGrid"></div>
+  </section>
+
+  <section class="home-extra">
+    <button type="button" class="btn btn-ghost" id="btnImportProject"><span data-icon="file-arrow-up"></span>Открыть проект из файла</button>
+  </section>
+</main>
+
+<!-- ========================================================= редактор -->
+<main class="screen editor" id="editor" hidden aria-label="Редактор">
+  <header class="topbar">
+    <button type="button" class="icon-btn" id="btnHome" title="Все проекты" aria-label="Все проекты" data-icon="arrow-left"></button>
+    <div class="doc-title">
+      <input type="text" id="docName" aria-label="Название проекта" spellcheck="false" autocomplete="off" enterkeyhint="done">
+      <span class="chip hide-sm" id="docRubric"></span>
+    </div>
+    <div class="top-actions">
+      <button type="button" class="icon-btn" id="btnUndo" title="Отменить (⌘Z)" aria-label="Отменить" data-icon="arrow-counter-clockwise" disabled></button>
+      <button type="button" class="icon-btn" id="btnRedo" title="Повторить (⌘⇧Z)" aria-label="Повторить" data-icon="arrow-clockwise" disabled></button>
+      <button type="button" class="icon-btn" id="btnView" title="Просмотр карусели" aria-label="Просмотр карусели" data-icon="eye"></button>
+      <button type="button" class="icon-btn hide-sm" id="btnHelp" title="Как пользоваться" aria-label="Как пользоваться" data-icon="question"></button>
+      <button type="button" class="icon-btn theme-btn hide-sm" id="btnTheme" title="Тёмная тема" aria-label="Тема" data-icon="moon"></button>
+      <button type="button" class="btn btn-primary btn-export" id="btnExport" title="Экспорт (⌘S)"><span data-icon="export"></span><span class="export-label">Сохранить</span></button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="slides-pane" aria-label="Слайды">
+      <div class="slides-list" id="slidesList"></div>
+    </aside>
+
+    <section class="stage-pane">
+      <div class="stage" id="stage">
+        <div class="stage-inner" id="stageInner">
+          <canvas id="stageCanvas"></canvas>
+          <div class="stage-overlay" id="stageOverlay"></div>
+        </div>
+        <button type="button" class="stage-nav prev" id="btnPrev" aria-label="Предыдущий слайд" data-icon="caret-left"></button>
+        <button type="button" class="stage-nav next" id="btnNext" aria-label="Следующий слайд" data-icon="caret-right"></button>
+      </div>
+      <div class="stage-foot">
+        <div class="warnings" id="warnings"></div>
+        <span class="counter" id="slideCounter"></span>
+      </div>
+    </section>
+
+    <aside class="panel" id="panel" aria-label="Настройки слайда">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab" data-tab="slide" role="tab">Слайд</button>
+        <button type="button" class="tab" data-tab="settings" role="tab">Настройки</button>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </aside>
+  </div>
+</main>
+
+<!-- ============================================ нижняя шторка / окно -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h3 id="sheetTitle"></h3>
+      <button type="button" class="icon-btn" id="sheetClose" aria-label="Закрыть" data-icon="x"></button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="viewer" id="viewer" hidden>
+  <div class="viewer-top">
+    <span class="viewer-count" id="viewerCount"></span>
+    <button type="button" class="icon-btn" id="viewerClose" aria-label="Закрыть просмотр" data-icon="x"></button>
+  </div>
+  <div class="viewer-track" id="viewerTrack"></div>
+</div>
+
+<div class="status" id="status" role="status" aria-live="polite"></div>
+<div class="drop-hint" id="dropHint" hidden>Отпустите, чтобы добавить фото</div>
+
+<input type="file" id="filePicker" accept="image/*" multiple hidden>
+<input type="file" id="projectPicker" accept=".json,application/json" hidden>
+<input type="file" id="brandPicker" hidden>
+
+<script>
+__ICONS__
+__BUNDLED__
+__RENDER_JS__
+__APP_JS__
+</script>
+</body>
+</html>

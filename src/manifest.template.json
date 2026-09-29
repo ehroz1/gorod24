@@ -1,0 +1,16 @@
+{
+  "name": "Город 24 — конструктор постов",
+  "short_name": "Город 24",
+  "description": "Обложки и карусели для Instagram по макетам «Город 24»",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f5f5",
+  "theme_color": "#ffffff",
+  "lang": "ru",
+  "icons": [
+    { "src": "__PWA_ICON__", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "__PWA_ICON_PNG__", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}
