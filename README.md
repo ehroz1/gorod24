@@ -24,27 +24,16 @@
 
 ---
 
-## Шрифты макета — важно
+## Шрифты и логотип
 
-В макете три шрифта: **BravoRG** (заголовки), **Nauryz Red Keds**
-(рубрики «Заведения» и «Новые места») и **Inter** (текст). Inter уже
-вшит. BravoRG и Nauryz Red Keds в репозиторий не положены — пока их нет,
-слайды рисуются похожими свободными шрифтами (Oswald, сжатый по ширине,
-и Unbounded), а приложение показывает жёлтую подсказку.
+Всё уже вшито: **BravoRG** (заголовки), **Nauryz Red Keds** (рубрики
+«Заведения» и «Новые места»), **Inter** (текст) и векторный логотип
+«город 24». Коллегам ничего устанавливать не нужно.
 
-Как добавить (один раз для всех):
-
-1. Положи файлы в `brand/fonts/`: BravoRG → `title.ttf`,
-   Nauryz Red Keds (Bold) → `display.ttf` (подходят и .otf/.woff2).
-2. Запусти `python3 build.py` и залей три собранных файла.
-
-Быстрый способ (только в своём браузере): редактор → вкладка
-**Настройки** → «Шрифты и логотип» → загрузить файл. Там же можно
-заменить логотип.
-
-Логотип в `brand/logo.png` вырезан из скриншота макета. Если есть
-исходник в хорошем качестве — белый знак на прозрачном фоне — просто
-замени файл и пересобери.
+Заменить шрифт или логотип: положи новый файл в `brand/` (имена — в
+`brand/ПОЛОЖИ_СЮДА_ФАЙЛЫ.txt`), запусти `python3 build.py` и залей три
+собранных файла. Быстрый способ только для своего браузера — редактор →
+вкладка **Настройки** → «Шрифты и логотип».
 
 ---
 
@@ -165,13 +154,13 @@ src/
   index.template.html   каркас страницы
   manifest.template.json, service-worker.js
 brand/
-  logo.png              логотип — белый знак на прозрачном фоне
+  logo.svg              логотип — белый знак (вектор)
   photo-stack.png       стопка фотографий из «Любимых мест»
   pwa-icon.svg, pwa-icon-180.png   значок приложения
-  fonts/                body.ttf, body-italic.ttf (Inter), fallback-*.ttf (запасные),
-                        сюда же title.ttf (BravoRG) и display.ttf (Nauryz Red Keds)
+  fonts/                title.otf (BravoRG), display.ttf (Nauryz Red Keds),
+                        body.ttf, body-italic.ttf (Inter), fallback-*.ttf (запасные)
   icons/                иконки интерфейса — Phosphor Icons (Bold), MIT
 ```
 
-Шрифты Inter, Oswald и Unbounded — SIL Open Font License, иконки
-Phosphor — MIT (`brand/icons/LICENSE`).
+Лицензии шрифтов — `brand/fonts/LICENSE.txt`, иконки Phosphor — MIT
+(`brand/icons/LICENSE`).

@@ -1,8 +1,10 @@
-body.ttf, body-italic.ttf  — Inter (Rasmus Andersson), SIL Open Font License 1.1
-fallback-title.ttf         — Oswald Light (Vernon Adams и др.), SIL Open Font License 1.1
-fallback-display.ttf       — Unbounded SemiBold (NaN), SIL Open Font License 1.1
+title.otf          — BravoRG (Michael Chereda). Файл предоставлен владельцем
+                     проекта; по данным fonts.uprock.ru распространяется
+                     свободно (SIL Open Font License 1.1).
+display.ttf        — Nauryz Red Keds, © 2024 Red Keds CA, бесплатный
+                     (в т. ч. для коммерческого использования).
+body.ttf, body-italic.ttf — Inter (Rasmus Andersson), SIL Open Font License 1.1
+fallback-title.ttf — Oswald Light (Vernon Adams и др.), SIL Open Font License 1.1
+fallback-display.ttf — Unbounded SemiBold (NaN), SIL Open Font License 1.1
 
-Текст лицензии: https://openfontlicense.org
-
-title.ttf (BravoRG) и display.ttf (Nauryz Red Keds), если их сюда положить,
-распространяются на условиях их авторов.
+Текст OFL: https://openfontlicense.org

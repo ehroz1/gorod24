@@ -350,13 +350,18 @@ function loadImage(src) {
   });
 }
 
-/* Обрезает прозрачные поля — логотип встаёт в рамку по видимой части. */
+/* Обрезает прозрачные поля — логотип встаёт в рамку по видимой части.
+   Маленькие картинки (SVG приходит в своих 123×105) сначала растеризуются
+   крупнее, чтобы знак оставался чётким и в экспорте 1440×1800. */
 function trimTransparent(img) {
-  const [w, h] = mediaSize(img);
+  const [iw, ih] = mediaSize(img);
+  const s = Math.max(iw, ih) < 900 ? 1000 / Math.max(iw, ih) : 1;
+  const w = Math.max(1, Math.round(iw * s)), h = Math.max(1, Math.round(ih * s));
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
-  ctx.drawImage(img, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
   let data;
   try { data = ctx.getImageData(0, 0, w, h).data; } catch { return c; }
   let x0 = w, y0 = h, x1 = -1, y1 = -1;

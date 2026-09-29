@@ -82,15 +82,17 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 ### Fonts
 
 Families: `G24Title` (BravoRG), `G24Display` (Nauryz Red Keds), `G24Body`
-(Inter 400 normal/italic). `build.py` embeds `brand/fonts/title.*` /
-`display.*` if present, otherwise `fallback-title.ttf` (Oswald Light) /
-`fallback-display.ttf` (Unbounded SemiBold), and emits
-`BUNDLED_FONTS = {title, display}` booleans. Users can also upload fonts in
-the app (Настройки) — stored in IndexedDB (`brand/font-title`,
+(Inter 400 normal/italic). `build.py` embeds `brand/fonts/title.*`
+(BravoRG.otf) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
+and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
+`fallback-display.ttf` (Unbounded SemiBold) only if they are missing; it emits
+`BUNDLED_FONTS = {title, display}` booleans (false → the app shows a «нет
+шрифтов макета» note and applies `FONT_STRETCH`). Users can also upload fonts
+in the app (Настройки) — stored in IndexedDB (`brand/font-title`,
 `brand/font-display`), registered as `G24TitleUser`/`G24DisplayUser`, which
-come first in `FONT_FAMILY`. The real BravoRG / Nauryz files are not in the
-repo (the sandbox could not download them) — that is why the app shows a
-«нет шрифтов макета» note.
+come first in `FONT_FAMILY`. With the real fonts every layout was compared
+against the Figma screenshots and matches (line breaks differ only where
+`GLUE_WORDS` deliberately moves a short word to the next line).
 
 ### `src/app.js` — UI and state
 
@@ -150,12 +152,20 @@ dark values duplicated in `@media (prefers-color-scheme: dark)
 :root:not([data-theme="light"])` and `:root[data-theme="dark"]` — keep both in
 sync. Saved choice (`g24.theme.v1`) is applied by an inline script in `<head>`.
 
-## Assets extracted from Figma
+## Assets
 
-The Figma MCP Starter plan ran out of calls mid-way, so raw image fills could
-not be exported. `brand/logo.png` and `brand/photo-stack.png` were cut from
-0.57× Figma screenshots (logo upscaled ×4 with a contrast curve; photo stack
-flood-filled out of the white background and upscaled ×2). If better sources
-become available (original logo, the «фотопленка не удалять!» image fill),
-replace the files; the stack's placement is `STACK` in `render.js` (visible
+`brand/logo.svg` is the owner's vector logo (white mark). `app.js`
+rasterizes it at ~1000px (`trimTransparent`) before tinting, so it stays
+sharp in exports; `brand/pwa-icon.svg` embeds the same paths and
+`pwa-icon-180.png` is rendered from it. `brand/photo-stack.png` was cut from a
+0.57× Figma screenshot (the Figma MCP Starter plan ran out of calls, so the
+raw image fill «фотопленка не удалять!» could not be exported): flood-filled
+out of the white background and upscaled ×2. If the original fill becomes
+available, replace the file; its placement is `STACK` in `render.js` (visible
 bounds, not the Figma node bounds).
+
+## Deployment
+
+GitHub Pages from the `gh-pages` branch, which carries the same tree as the
+development branch (the built `index.html` is committed). After changing
+`src/`/`brand/`: rebuild, commit, and push the result to `gh-pages` too.

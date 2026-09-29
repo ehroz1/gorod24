@@ -588,7 +588,8 @@ function renderFavoriteCard(ctx, slide, env, L) {
   const maxW = 1253;
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
   drawBlock(ctx, body, (W - maxW) / 2, 1268, BLACK, 'center', alphaOf(body));
-  return { overflow: real(body) && 1268 + body.height > 1650, photo };
+  // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
+  return { overflow: real(body) && 1268 + body.height > 1700, photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
