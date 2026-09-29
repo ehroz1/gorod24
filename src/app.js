@@ -1,5 +1,8 @@
 /*
  * Интерфейс конструктора «Город 24».
+ * Фото и видео: в слот фото любого макета можно поставить и видео —
+ * оно рисуется на canvas кадр за кадром тем же drawCover, а при экспорте
+ * слайд записывается в MP4/WebM (раздел «видео» ниже).
  *
  * Два экрана в одной странице: стартовый (рубрики + черновики) и редактор
  * (превью, лента слайдов, форма слайда, экспорт). Вся вёрстка слайдов —
@@ -582,6 +585,10 @@ function ensureMedia(projectId, ids) {
       const blob = await idbGet(projectId + '/' + id);
       if (!(blob instanceof Blob)) return;
       try {
+        if (/^video\//.test(blob.type)) {
+          media.set(id, await createVideoMedia(blob));
+          return;
+        }
         const img = await decodeBlob(blob);
         const [w, h] = mediaSize(img);
         media.set(id, { blob, prev: downscale(img, PREVIEW_MAX), w, h });
@@ -595,8 +602,339 @@ function ensureMedia(projectId, ids) {
 }
 
 function freeMedia() {
-  for (const m of media.values()) { if (m.prev) { m.prev.width = 0; m.prev.height = 0; } }
+  stopPlayback();
+  for (const m of media.values()) {
+    if (m.kind === 'video') releaseVideo(m.prev);
+    else if (m.prev) { m.prev.width = 0; m.prev.height = 0; }
+  }
   media.clear();
+}
+
+/* ------------------------------------------------------------------ видео */
+/*
+ * Видео живёт как <video> на blob-URL (в DOM не вставляется): для превью и
+ * миниатюр рисуем его текущий кадр, как картинку. Фрагмент задаётся на
+ * слайде — slide.photo.start / end (секунды), так что у дубликатов слайда
+ * с одним и тем же видео фрагменты могут быть разными.
+ *
+ * Звук при экспорте берём через Web Audio (createMediaElementSource →
+ * MediaStreamDestination), а не video.captureStream(): его нет в Safari.
+ * Узел-источник создаётся один раз на элемент, и после этого звук элемента
+ * идёт только через граф — поэтому при записи его не слышно, а для
+ * просмотра со звуком узел подключаем к динамикам (routeToSpeakers).
+ */
+const VIDEO_LIMIT = { carousel: 60, reels: 90 };   // Instagram: видео в карусели — до 60 с
+const VIDEO_EXPORT_WIDTH = 1080;   // видео пишем в 1080 по ширине — Instagram всё равно ужмёт, телефону легче
+const MIN_CLIP = 0.5;
+const STOP_GRACE_MS = 350;          // MediaRecorder: stop() раньше onstart даёт пустой файл
+
+function isVideoFile(file) {
+  return /^video\//.test(file.type || '') || /\.(mp4|mov|m4v|webm|3gp)$/i.test(file.name || '');
+}
+function isVideoMedia(m) { return Boolean(m && m.kind === 'video'); }
+function slideMedia(slide) { return slide && slide.photo ? media.get(slide.photo.id) : null; }
+
+function waitEvent(target, name, ms) {
+  return new Promise(resolve => {
+    let timer = null;
+    const done = ok => { clearTimeout(timer); target.removeEventListener(name, on); resolve(ok); };
+    const on = () => done(true);
+    target.addEventListener(name, on);
+    timer = setTimeout(() => done(false), ms);
+  });
+}
+
+function seekVideo(video, t) {
+  if (Math.abs(video.currentTime - t) < 0.02 && video.readyState >= 2) return Promise.resolve(true);
+  const p = waitEvent(video, 'seeked', 4000);
+  video.currentTime = t;
+  return p;
+}
+
+/* Blob → <video> с загруженным первым кадром и известной длительностью. */
+async function createVideoMedia(blob) {
+  const video = document.createElement('video');
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  video.muted = true;
+  video.preload = 'auto';
+  video._url = URL.createObjectURL(blob);
+  const meta = waitEvent(video, 'loadedmetadata', 15000);
+  const failed = waitEvent(video, 'error', 15000);
+  video.src = video._url;
+  const ok = await Promise.race([meta, failed.then(() => false)]);
+  if (!ok || video.error || !video.videoWidth) { releaseVideo(video); throw new Error('video'); }
+  // у записей MediaRecorder длительность бывает Infinity, пока не дойти до конца
+  if (!isFinite(video.duration)) {
+    const dur = waitEvent(video, 'durationchange', 3000);
+    video.currentTime = 1e7;
+    await dur;
+    await seekVideo(video, 0);
+  }
+  // iOS не показывает кадр, пока видео хоть раз не проиграли (без звука можно)
+  if (video.readyState < 2) {
+    try { await video.play(); video.pause(); } catch { /* покажем, когда догрузится */ }
+  }
+  await seekVideo(video, Math.min(0.05, (video.duration || 1) / 2));
+  video.addEventListener('seeked', () => { if (!playback) { thumbSig.clear(); scheduleRender(); } });
+  video.addEventListener('loadeddata', () => { thumbSig.clear(); scheduleRender(); });
+  return { kind: 'video', blob, prev: video, w: video.videoWidth, h: video.videoHeight,
+           duration: isFinite(video.duration) ? video.duration : 0 };
+}
+
+function releaseVideo(video) {
+  if (!video) return;
+  try { video.pause(); } catch { /* уже нет */ }
+  if (video._url) { URL.revokeObjectURL(video._url); video._url = null; }
+  video.removeAttribute('src');
+  try { video.load(); } catch { /* ок */ }
+}
+
+async function importVideo(file) {
+  let entry;
+  try { entry = await createVideoMedia(file); } catch {
+    throw new Error('Не получилось открыть видео — этот формат браузер не проигрывает');
+  }
+  const id = newId();
+  media.set(id, entry);
+  if (state.project) {
+    const saved = await idbPut(state.project.id + '/' + id, file);
+    if (!saved) say('Видео не поместилось в память браузера — после перезагрузки его нужно будет добавить заново', 6000);
+  }
+  return id;
+}
+
+function importMedia(file) {
+  return isVideoFile(file) ? importVideo(file) : importPhoto(file);
+}
+
+function videoLimit(slide) {
+  return layoutOf(slide).W === 1080 ? VIDEO_LIMIT.reels : VIDEO_LIMIT.carousel;
+}
+
+/* Фрагмент видео на слайде, приведённый к длине ролика. */
+function clipOf(slide, m = slideMedia(slide)) {
+  const d = (m && m.duration) || 0;
+  if (!d) return { start: 0, end: 0, length: 0 };
+  const start = clamp(Number(slide.photo.start) || 0, 0, Math.max(0, d - MIN_CLIP));
+  let end = Number(slide.photo.end) > 0 ? Number(slide.photo.end) : Math.min(d, videoLimit(slide));
+  end = clamp(end, Math.min(d, start + MIN_CLIP), d);
+  return { start, end, length: end - start };
+}
+
+function formatTime(t) {
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1).replace('.', ',');
+}
+
+/* Кадр начала фрагмента — чтобы превью и миниатюры показывали то, с чего начнётся видео. */
+function showClipStart(slide) {
+  const m = slideMedia(slide);
+  if (!isVideoMedia(m) || playback) return;
+  seekVideo(m.prev, clipOf(slide, m).start);
+}
+
+let audioCtx = null;
+function getAudioCtx() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!audioCtx) { try { audioCtx = new AC(); } catch { return null; } }
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+function audioSource(video) {
+  if (video._src !== undefined) return video._src;
+  const ctx = getAudioCtx();
+  try { video._src = ctx ? ctx.createMediaElementSource(video) : null; } catch { video._src = null; }
+  return video._src;
+}
+
+/* Вызывается прямо в обработчике нажатия «Сохранить»: iOS разрешает звук и
+   AudioContext только из жеста пользователя. Узел создаём заранее — после
+   этого пробный play() не слышно. */
+function primeVideoAudio(slides) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  for (const slide of slides) {
+    const m = slideMedia(slide);
+    if (!isVideoMedia(m)) continue;
+    const v = m.prev;
+    if (!audioSource(v)) continue;
+    // play() внутри жеста «разрешает» элементу звук; сразу же pause() —
+    // синхронно, без .then(): отложенная пауза прилетала уже во время записи
+    // и замораживала видео на первом кадре
+    v.muted = false;
+    const p = v.play();
+    v.pause();
+    if (p && p.catch) p.catch(() => {});
+  }
+}
+
+/* ---- просмотр видео на превью */
+let playback = null;   // { slideId, video, raf, lastDraw, speakers }
+
+function togglePlayback() {
+  if (playback) { stopPlayback(); return; }
+  const slide = currentSlide();
+  const m = slideMedia(slide);
+  if (!isVideoMedia(m)) return;
+  const v = m.prev;
+  const clip = clipOf(slide, m);
+  if (v.currentTime < clip.start || v.currentTime >= clip.end - 0.05) v.currentTime = clip.start;
+  playback = { slideId: slide.id, video: v, raf: 0, lastDraw: 0, speakers: false };
+  if (v._src && audioCtx) { v._src.connect(audioCtx.destination); playback.speakers = true; getAudioCtx(); }
+  v.muted = false;
+  const p = v.play();
+  if (p && p.catch) p.catch(() => { v.muted = true; v.play().catch(() => stopPlayback()); });
+  const tick = now => {
+    if (!playback) return;
+    const cur = state.project && state.project.slides.find(x => x.id === playback.slideId);
+    const c = cur ? clipOf(cur, m) : clip;
+    if (v.currentTime >= c.end || v.ended) {
+      v.currentTime = c.start;
+      if (v.paused) v.play().catch(() => {});
+    }
+    if (now - playback.lastDraw > 33) { playback.lastDraw = now; renderStage(); }
+    playback.raf = requestAnimationFrame(tick);
+  };
+  playback.raf = requestAnimationFrame(tick);
+  renderOverlay();
+  syncPlayButtons();
+}
+
+function stopPlayback() {
+  if (!playback) return;
+  const { video, raf, speakers } = playback;
+  cancelAnimationFrame(raf);
+  playback = null;
+  video.pause();
+  video.muted = true;
+  if (speakers && video._src && audioCtx) { try { video._src.disconnect(audioCtx.destination); } catch { /* ок */ } }
+  if (state.screen === 'editor') { thumbSig.clear(); scheduleRender(); }
+  syncPlayButtons();
+}
+
+function syncPlayButtons() {
+  document.querySelectorAll('[data-play-toggle]').forEach(b => {
+    const on = Boolean(playback);
+    b.replaceChildren(iconSpan(on ? 'pause' : 'play'), document.createTextNode(b.dataset.label === 'short' ? '' : (on ? 'Пауза' : 'Смотреть')));
+    b.setAttribute('aria-label', on ? 'Пауза' : 'Смотреть');
+  });
+}
+
+/* ---- запись видео-слайда */
+const RECORDER_TYPES = {
+  audio: ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4',
+          'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'],
+  silent: ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4',
+           'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'],
+};
+function recorderType(withAudio) {
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return null;
+  for (const t of RECORDER_TYPES[withAudio ? 'audio' : 'silent']) {
+    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch { /* дальше */ }
+  }
+  return null;
+}
+function canRecordVideo() {
+  return Boolean(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream && recorderType(false));
+}
+function videoExt() {
+  const t = recorderType(false) || '';
+  return t.startsWith('video/mp4') ? 'mp4' : 'webm';
+}
+
+/*
+ * Проигрывает фрагмент и пишет canvas (+ звук ролика) через MediaRecorder.
+ * Порядок как в Card Maker, проверенный замерами: запись стартует до
+ * воспроизведения, а останавливается не раньше STOP_GRACE_MS после onstart
+ * (иначе пустой файл или один кадр); всё это время рисуем последний кадр.
+ */
+async function recordVideoSlide(slide, index, onProgress) {
+  const m = slideMedia(slide);
+  const L = layoutOf(slide);
+  const v = m.prev;
+  const clip = clipOf(slide, m);
+  const k = VIDEO_EXPORT_WIDTH / L.W;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(L.W * k);
+  canvas.height = Math.round(L.H * k);
+  const ctx = canvas.getContext('2d');
+  const env = envFor(slide, index, { ghost: false, k, photo: v });
+  const draw = () => {
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.imageSmoothingQuality = 'high';
+    renderSlide(ctx, slide, env);
+  };
+
+  v.pause();
+  await seekVideo(v, clip.start);
+  draw();
+
+  const stream = canvas.captureStream(30);
+  const src = audioSource(v);
+  let dest = null;
+  if (src && audioCtx) {
+    try { dest = audioCtx.createMediaStreamDestination(); src.connect(dest); } catch { dest = null; }
+  }
+  const audioTracks = dest ? dest.stream.getAudioTracks() : [];
+  const tracks = [...stream.getVideoTracks(), ...audioTracks];
+  const type = recorderType(audioTracks.length > 0) || recorderType(false);
+  let recorder;
+  try {
+    recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: type, videoBitsPerSecond: 10000000, audioBitsPerSecond: 160000 });
+  } catch {
+    recorder = new MediaRecorder(new MediaStream(tracks));
+  }
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+  let startedAt = 0;
+  recorder.onstart = () => { startedAt = performance.now(); };
+  recorder.start(500);
+
+  v.muted = !dest;
+  try { await v.play(); } catch {
+    v.muted = true;
+    try { await v.play(); } catch { /* дорисуем кадр как есть */ }
+  }
+
+  await new Promise(resolve => {
+    const hardStop = performance.now() + clip.length * 1000 + 8000;
+    let endedAt = 0;
+    let lastKick = performance.now();
+    const tick = () => {
+      draw();
+      const now = performance.now();
+      if (onProgress) onProgress(clamp((v.currentTime - clip.start) / clip.length, 0, 1));
+      if (!endedAt && (v.currentTime >= clip.end - 0.01 || v.ended)) {
+        endedAt = now;
+        v.pause();
+      } else if (!endedAt && v.paused && now - lastKick > 400) {
+        // кто-то (система, другая вкладка) поставил на паузу — продолжаем
+        lastKick = now;
+        v.play().catch(() => {});
+      }
+      if (now > hardStop || (endedAt && startedAt && now - startedAt > STOP_GRACE_MS && now - endedAt > 120)) {
+        v.pause();
+        resolve();
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  recorder.stop();
+  await stopped;
+  if (dest) { try { src.disconnect(dest); } catch { /* ок */ } }
+  v.muted = true;
+  stream.getTracks().forEach(t => t.stop());
+  canvas.width = canvas.height = 0;
+  const mime = (recorder.mimeType || type || 'video/webm').split(';')[0];
+  return new Blob(chunks, { type: mime });
 }
 
 /* ------------------------------------------------------------- проекты */
@@ -647,8 +985,9 @@ function normalizeSlides(slides) {
     fields: Object.assign({}, s.fields),
     opts: Object.assign({}, s.opts),
     size: Object.assign({}, s.size),
-    photo: s.photo && s.photo.id ? { id: String(s.photo.id), zoom: Number(s.photo.zoom) || 1,
-      x: Number(s.photo.x) || 0, y: Number(s.photo.y) || 0 } : null,
+    photo: s.photo && s.photo.id ? Object.assign({ id: String(s.photo.id), zoom: Number(s.photo.zoom) || 1,
+      x: Number(s.photo.x) || 0, y: Number(s.photo.y) || 0 },
+      s.photo.end > 0 ? { start: Number(s.photo.start) || 0, end: Number(s.photo.end) } : {}) : null,
   }));
 }
 
@@ -806,8 +1145,10 @@ function selectSlide(index, { scroll = true } = {}) {
   if (!state.project) return;
   index = clamp(index, 0, state.project.slides.length - 1);
   const changed = index !== state.current;
+  if (changed) stopPlayback();
   state.current = index;
   state.panHintAt = 0;
+  showClipStart(state.project.slides[index]);
   syncSlideSelection(scroll);
   if (changed) renderPanel();
   scheduleRender();
@@ -900,7 +1241,7 @@ function setSize(group, value) {
 /* Фото: одно — на текущий слайд, несколько — по слайдам с местом под фото
    начиная с текущего; лишним фото создаются новые карточки рубрики. */
 async function addPhotos(files, startIndex = state.current) {
-  const list = [...files].filter(f => f && /^image\//.test(f.type || 'image/'));
+  const list = [...files].filter(f => f && (/^image\//.test(f.type || 'image/') || isVideoFile(f)));
   if (!list.length) return;
   const slides = state.project.slides;
   const targets = [];
@@ -908,12 +1249,13 @@ async function addPhotos(files, startIndex = state.current) {
     if (layoutOf(slides[i]).photo && (i === startIndex || !slides[i].photo)) targets.push(i);
   }
   pushUndo();
-  say(list.length > 1 ? `Загружаю ${list.length} ${pluralRu(list.length, 'фото', 'фото', 'фото')}…` : 'Загружаю фото…', 60000);
-  let done = 0, failed = 0;
+  stopPlayback();
+  say(list.length > 1 ? `Загружаю ${list.length} файла(ов)…` : (isVideoFile(list[0]) ? 'Загружаю видео…' : 'Загружаю фото…'), 60000);
+  let done = 0, failed = 0, longVideo = 0;
   const cardLayout = rubricOf().card;
   for (const file of list) {
     let id;
-    try { id = await importPhoto(file); } catch (err) { failed++; say(err.message); continue; }
+    try { id = await importMedia(file); } catch (err) { failed++; say(err.message); continue; }
     let idx = targets.shift();
     if (idx === undefined) {
       if (!LAYOUTS[cardLayout].photo) { failed++; continue; }
@@ -921,18 +1263,28 @@ async function addPhotos(files, startIndex = state.current) {
       state.project.slides.push(slide);
       idx = state.project.slides.length - 1;
     }
-    state.project.slides[idx].photo = { id, zoom: 1, x: 0, y: 0 };
+    const target = state.project.slides[idx];
+    target.photo = { id, zoom: 1, x: 0, y: 0 };
+    const m = media.get(id);
+    if (isVideoMedia(m)) {
+      target.photo.start = 0;
+      target.photo.end = Math.min(m.duration, videoLimit(target));
+      if (m.duration > videoLimit(target) + 0.05) longVideo = videoLimit(target);
+    }
     done++;
     if (idx === state.current) state.panHintAt = Date.now();
     commit({ structure: true });
   }
-  if (done) say(done > 1 ? `Добавлено ${done} фото` : 'Фото добавлено');
+  if (longVideo) say(`Видео длиннее ${longVideo} с — взял первые ${longVideo} с, фрагмент поправьте в блоке «Видео»`, 6000);
+  else if (done) say(done > 1 ? `Добавлено: ${done}` : 'Готово');
   else if (!failed) say('Нет слайдов с местом под фото');
+  showClipStart(currentSlide());
 }
 
 function removePhoto(index = state.current) {
   const slide = state.project.slides[index];
   if (!slide.photo) return;
+  stopPlayback();
   pushUndo();
   slide.photo = null;
   commit({ panel: true });
@@ -1054,23 +1406,47 @@ function renderOverlay() {
   const slide = currentSlide();
   const L = layoutOf(slide);
   const r = state.lastRender;
-  el.stageOverlay.replaceChildren();
-  if (!L.photo || !r || !r.res.photo) return;
-  const area = r.res.photo;
+  const area = L.photo && r && r.res.photo;
   const hasPhoto = slide.photo && media.has(slide.photo.id);
   const loading = slide.photo && loadingMedia.has(slide.photo.id);
-  const cx = (area.cx !== undefined ? area.cx : area.x + area.w / 2) * r.scale;
-  let cy = (area.cy !== undefined ? area.cy : area.y + area.h / 2) * r.scale;
-  // на обложке фото на весь слайд — кнопку ставим повыше, чтобы не спорить с текстом
-  if (area.w >= L.W - 1 && area.h >= L.H - 1) cy = r.cssH * 0.4;
+  let cx = 0, cy = 0;
+  if (area) {
+    cx = (area.cx !== undefined ? area.cx : area.x + area.w / 2) * r.scale;
+    cy = (area.cy !== undefined ? area.cy : area.y + area.h / 2) * r.scale;
+    // на обложке фото на весь слайд — кнопку ставим повыше, чтобы не спорить с текстом
+    if (area.w >= L.W - 1 && area.h >= L.H - 1) cy = r.cssH * 0.4;
+  }
+  // Перерисовка идёт до 30 раз в секунду (видео играет) — пересоздавать кнопки
+  // каждый кадр нельзя: по ним не попасть. Меняем DOM, только если что-то изменилось.
+  const vm = slideMedia(slide);
+  const key = JSON.stringify([slide.id, Boolean(area), hasPhoto, loading, Math.round(cx), Math.round(cy),
+    isVideoMedia(vm) ? [Boolean(playback), clipOf(slide, vm).length.toFixed(1)] : 0,
+    Date.now() - state.panHintAt < PAN_HINT_MS ? state.panHintAt : 0]);
+  if (el.stageOverlay.dataset.key === key) return;
+  el.stageOverlay.dataset.key = key;
+  el.stageOverlay.replaceChildren();
+  if (!area) return;
   if (!hasPhoto) {
-    const pill = btn('photo-pill', 'image', loading ? 'Загружаю…' : 'Добавить фото', e => {
+    const pill = btn('photo-pill', 'image', loading ? 'Загружаю…' : (isWide() ? 'Добавить фото или видео' : 'Фото или видео'), e => {
       e.stopPropagation();
       pickPhotos();
     });
     pill.style.left = cx + 'px';
     pill.style.top = cy + 'px';
     el.stageOverlay.append(pill);
+  } else if (isVideoMedia(media.get(slide.photo.id))) {
+    const m = media.get(slide.photo.id);
+    const play = h('button', { type: 'button', class: 'media-pill', 'data-play-toggle': '1',
+      onclick: e => { e.stopPropagation(); togglePlayback(); } });
+    const clip = clipOf(slide, m);
+    play.append(iconSpan(playback ? 'pause' : 'play'), document.createTextNode(playback ? 'Пауза' : formatTime(clip.length)));
+    play.setAttribute('aria-label', playback ? 'Пауза' : 'Смотреть видео');
+    el.stageOverlay.append(play);
+    if (Date.now() - state.panHintAt < PAN_HINT_MS) {
+      const hint = h('div', { class: 'pan-hint', text: isTouch() ? 'Двигайте видео пальцем, щипок — масштаб' : 'Тяните видео мышью, колесо — масштаб' });
+      hint.style.animationDelay = -(Date.now() - state.panHintAt) + 'ms';
+      el.stageOverlay.append(hint);
+    }
   } else if (Date.now() - state.panHintAt < PAN_HINT_MS) {
     // подсказка переживает перерисовки: анимация продолжается с того же места
     const hint = h('div', { class: 'pan-hint', text: isTouch() ? 'Двигайте фото пальцем, щипок — масштаб' : 'Тяните фото мышью, колесо — масштаб' });
@@ -1084,9 +1460,9 @@ function photoUpscale(slide) {
   const m = slide.photo && media.get(slide.photo.id);
   if (!m || !r || !r.res.photo || !r.res.photo.applied) return 0;
   // applied.scale — единиц макета на пиксель превью; переводим в пиксели оригинала
-  const perFull = r.res.photo.applied.scale * m.prev.width / m.w;
+  const perFull = r.res.photo.applied.scale * mediaSize(m.prev)[0] / m.w;
   const L = layoutOf(slide);
-  const exportK = L.W === 1440 ? state.exportWidth / 1440 : 1;
+  const exportK = isVideoMedia(m) ? VIDEO_EXPORT_WIDTH / L.W : (L.W === 1440 ? state.exportWidth / 1440 : 1);
   return perFull * exportK;
 }
 
@@ -1100,6 +1476,10 @@ function renderWarnings() {
   }
   const up = photoUpscale(slide);
   if (up > UPSCALE_WARN) items.push(h('span', { class: 'warn' }, iconSpan('warning'), wide ? 'Фото мелковато — будет мыльным' : 'Фото мелковато'));
+  const vm = slideMedia(slide);
+  if (isVideoMedia(vm) && clipOf(slide, vm).length > videoLimit(slide) + 0.05) {
+    items.push(h('span', { class: 'warn' }, iconSpan('warning'), `Видео длиннее ${videoLimit(slide)} с`));
+  }
   if (!items.length) items.push(h('span', { class: 'warn ok' }, iconSpan('check'), 'Всё помещается'));
   el.warnings.replaceChildren(...items);
 }
@@ -1170,6 +1550,7 @@ function buildSlideItem(slide, i) {
     'aria-label': `Слайд ${i + 1}: ${L.name}` },
     h('span', { class: 'slide-thumb' }, canvas,
       h('span', { class: 'slide-num', text: String(i + 1) }),
+      isVideoMedia(slideMedia(slide)) ? h('span', { class: 'slide-video', title: 'Видео' }, iconSpan('film-strip')) : null,
       h('span', { class: 'slide-dot', hidden: !state.overflow[i] })),
     h('span', { class: 'slide-label', text: L.short + (slideTitle(slide) ? ' · ' + slideTitle(slide) : '') }),
     h('span', { class: 'slide-tools' },
@@ -1516,17 +1897,21 @@ function buildSlideForm() {
 }
 
 function buildPhotoSection(slide) {
-  const m = slide.photo && media.get(slide.photo.id);
+  const m = slideMedia(slide);
+  const video = isVideoMedia(m);
   const thumb = h('span', { class: 'photo-thumb' });
   if (m) {
-    const c = downscale(m.prev, 160);
-    c.style.width = '100%'; c.style.height = '100%'; c.style.objectFit = 'cover'; c.style.display = 'block';
-    thumb.append(c);
+    try {
+      const c = downscale(m.prev, 160);
+      c.style.width = '100%'; c.style.height = '100%'; c.style.objectFit = 'cover'; c.style.display = 'block';
+      thumb.append(c);
+    } catch { /* кадр ещё не готов */ }
   }
   const actions = h('div', { class: 'photo-actions' },
-    btn('btn btn-primary btn-sm', 'image', m ? 'Заменить' : 'Выбрать фото', () => pickPhotos()),
+    btn('btn btn-primary btn-sm', 'image', m ? 'Заменить' : 'Выбрать фото или видео', () => pickPhotos()),
     m ? btn('btn btn-ghost btn-sm', 'x', 'Убрать', () => removePhoto()) : null);
   const rows = [h('div', { class: 'photo-row' }, thumb, actions)];
+  if (video) rows.push(...buildTrimRows(slide, m));
   if (m) {
     rows.push(h('div', { style: 'height:12px' }));
     rows.push(rangeRow('Масштаб', { min: 100, max: ZOOM_MAX * 100, value: Math.round((slide.photo.zoom || 1) * 100), unit: '%', key: 'zoom',
@@ -1538,7 +1923,55 @@ function buildPhotoSection(slide) {
   } else {
     rows.push(h('p', { class: 'field-hint', style: 'margin-top:10px', text: 'Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.' }));
   }
-  return section('Фото', m ? btn('btn btn-ghost btn-sm', null, 'Сбросить кадр', () => resetFrame()) : null, ...rows);
+  return section(video ? 'Видео' : 'Фото или видео', m ? btn('btn btn-ghost btn-sm', null, 'Сбросить кадр', () => resetFrame()) : null, ...rows);
+}
+
+/* Начало и конец фрагмента: два ползунка с шагом 0,1 с. Пока тянешь —
+   превью показывает кадр на границе, которую двигаешь. */
+function buildTrimRows(slide, m) {
+  const d = m.duration || 0;
+  const clip = clipOf(slide, m);
+  const limit = videoLimit(slide);
+  const lengthNote = h('p', { class: 'field-hint' });
+  const syncNote = () => {
+    const c = clipOf(slide, m);
+    lengthNote.textContent = `Фрагмент ${formatTime(c.length)} из ${formatTime(d)}` +
+      (c.length > limit + 0.05 ? ` — для Instagram длиннее ${limit} с не получится` : '');
+    lengthNote.classList.toggle('warn-text', c.length > limit + 0.05);
+  };
+  const row = (label, key, value) => {
+    const out = h('output', { text: formatTime(value) });
+    const input = h('input', { type: 'range', min: 0, max: d.toFixed(2), step: 0.1, value: value.toFixed(2), 'aria-label': label });
+    input.addEventListener('input', () => {
+      pushUndo('trim:' + slide.id);
+      stopPlayback();
+      let t = Number(input.value);
+      if (key === 'start') {
+        t = Math.min(t, d - MIN_CLIP);
+        slide.photo.start = t;
+        if (clipOf(slide, m).end - t < MIN_CLIP) slide.photo.end = Math.min(d, t + MIN_CLIP);
+      } else {
+        t = Math.max(t, MIN_CLIP);
+        slide.photo.end = t;
+        if (t - (slide.photo.start || 0) < MIN_CLIP) slide.photo.start = Math.max(0, t - MIN_CLIP);
+      }
+      out.textContent = formatTime(t);
+      seekVideo(m.prev, key === 'start' ? clipOf(slide, m).start : Math.max(0, clipOf(slide, m).end - 0.05));
+      syncNote();
+      scheduleSave();
+    });
+    input.addEventListener('change', () => { showClipStart(slide); renderPanel(); });
+    return h('div', { class: 'range-row' }, h('label', { text: label }), input, out);
+  };
+  syncNote();
+  const play = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-play-toggle': '1', onclick: () => togglePlayback() });
+  play.append(iconSpan(playback ? 'pause' : 'play'), document.createTextNode(playback ? 'Пауза' : 'Смотреть'));
+  return [
+    h('div', { style: 'height:14px' }),
+    row('Начало', 'start', clip.start),
+    row('Конец', 'end', clip.end),
+    h('div', { class: 'trim-foot' }, play, lengthNote),
+  ];
 }
 
 function syncFrameInputs() {
@@ -1699,6 +2132,10 @@ function slideHasContent(slide) {
   return L.fields.some(k => (slide.fields[k] || '').trim()) || Boolean(L.photo && slide.photo && media.has(slide.photo.id));
 }
 
+function isVideoSlide(slide) {
+  return Boolean(layoutOf(slide).photo && isVideoMedia(slideMedia(slide)));
+}
+
 /* Слайд в полном размере: фото раскодируется из оригинала только на время отрисовки. */
 async function renderExport(slide, index) {
   const L = layoutOf(slide);
@@ -1711,7 +2148,7 @@ async function renderExport(slide, index) {
   ctx.imageSmoothingQuality = 'high';
   const m = L.photo && slide.photo && media.get(slide.photo.id);
   let full = null;
-  if (m) { try { full = await decodeBlob(m.blob); } catch { full = null; } }
+  if (m && !isVideoMedia(m)) { try { full = await decodeBlob(m.blob); } catch { full = null; } }
   renderSlide(ctx, slide, envFor(slide, index, { ghost: false, k, photo: full || (m ? m.prev : null) }));
   releaseImage(full);
   return canvas;
@@ -1721,23 +2158,41 @@ function exportName(i, ext) {
   return `${fileSlug(state.project.name, 'gorod24')}-${String(i + 1).padStart(2, '0')}.${ext}`;
 }
 
-/* Готовит файлы. only — индекс одного слайда или null (все). */
+/*
+ * Готовит файлы. only — индекс одного слайда или null (все). Слайды с видео
+ * записываются в реальном времени, поэтому прогресс считаем по времени:
+ * картинка ≈ 0,5 с, видео — длина фрагмента.
+ */
 async function buildFiles(only, onProgress) {
+  stopPlayback();
   const slides = state.project.slides;
   const idx = only === null ? slides.map((_, i) => i).filter(i => slideHasContent(slides[i])) : [only];
   const mime = state.exportFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
   const ext = state.exportFormat === 'jpeg' ? 'jpg' : 'png';
+  const weight = i => (isVideoSlide(slides[i]) ? Math.max(0.5, clipOf(slides[i]).length) : 0.5);
+  const total = idx.reduce((sum, i) => sum + weight(i), 0) || 1;
   const files = [];
-  let n = 0;
+  let doneWeight = 0;
+  let videoSkipped = 0;
   for (const i of idx) {
-    const canvas = await renderExport(slides[i], i);
-    const blob = await canvasToBlob(canvas, mime, 0.95);
-    canvas.width = canvas.height = 0;
-    if (blob) files.push(new File([blob], exportName(i, ext), { type: mime }));
-    n++;
-    if (onProgress) onProgress(n / idx.length);
+    const slide = slides[i];
+    if (isVideoSlide(slide) && canRecordVideo()) {
+      const blob = await recordVideoSlide(slide, i, f => onProgress && onProgress((doneWeight + f * weight(i)) / total));
+      const vext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+      if (blob.size) files.push(new File([blob], exportName(i, vext), { type: blob.type }));
+      showClipStart(slide);
+    } else {
+      if (isVideoSlide(slide)) videoSkipped++;
+      const canvas = await renderExport(slide, i);
+      const blob = await canvasToBlob(canvas, mime, 0.95);
+      canvas.width = canvas.height = 0;
+      if (blob) files.push(new File([blob], exportName(i, ext), { type: mime }));
+    }
+    doneWeight += weight(i);
+    if (onProgress) onProgress(doneWeight / total);
     await new Promise(r => setTimeout(r, 0));
   }
+  if (videoSkipped) say('Этот браузер не умеет записывать видео — видео-слайды сохранены картинкой. Откройте в Chrome или Safari', 7000);
   return files;
 }
 
@@ -1808,12 +2263,21 @@ function canShareFiles() {
   } catch { return false; }
 }
 
+/* Отдаём системному окну только то, что оно согласно принять: WebM, например,
+   iOS не шарит — такие файлы скачиваем. */
+function shareable(files) {
+  try { return navigator.canShare && navigator.canShare({ files }); } catch { return false; }
+}
+
 let exportBusy = false;
 
 function openExportSheet() {
   if (!state.project) return;
   const slides = state.project.slides;
+  stopPlayback();
   const count = slides.filter(slideHasContent).length;
+  const videos = slides.filter(isVideoSlide).length;
+  const videoSeconds = slides.filter(isVideoSlide).reduce((sum, sl) => sum + clipOf(sl).length, 0);
   const progress = h('div', { class: 'progress', hidden: true }, h('div'));
   const bar = progress.firstChild;
   const setProgress = f => { progress.hidden = false; bar.style.width = Math.round(f * 100) + '%'; };
@@ -1824,6 +2288,8 @@ function openExportSheet() {
     if (exportBusy) return;
     if (!count && label !== 'one') { say('Пока нечего сохранять — добавьте текст или фото'); return; }
     exportBusy = true;
+    // звук видео и AudioContext на iOS разрешаются только прямо из нажатия
+    if (videos) primeVideoAudio(slides);
     list.querySelectorAll('button').forEach(b => { b.disabled = true; });
     setProgress(0);
     try { await fn(); } catch (err) { console.error(err); say('Не получилось: ' + (err && err.message || 'ошибка')); }
@@ -1835,6 +2301,11 @@ function openExportSheet() {
   const share = async only => {
     const files = await buildFiles(only, setProgress);
     if (!files.length) return;
+    if (!shareable(files)) {
+      for (const f of files) { downloadBlob(f, f.name); await new Promise(r => setTimeout(r, 350)); }
+      say('Система не принимает эти файлы для «Поделиться» — скачал их');
+      return;
+    }
     try {
       await navigator.share({ files });
       closeSheet();
@@ -1856,7 +2327,7 @@ function openExportSheet() {
         () => run('share', () => share(null))),
       btn('btn', 'share-network', 'Поделиться только этим слайдом', () => run('one', () => share(state.current))));
     note.textContent = isIosDevice()
-      ? 'В окне «Поделиться» выберите «Сохранить изображения» — слайды окажутся в Фото, оттуда в Instagram.'
+      ? 'В окне «Поделиться» выберите «Сохранить» — слайды окажутся в Фото, оттуда в Instagram.'
       : 'Откроется системное окно: Telegram, Instagram, «Сохранить» и т. п.';
   }
   const addSub = (b, text) => { b.append(h('span', { class: 'sub', text })); return b; };
@@ -1876,7 +2347,7 @@ function openExportSheet() {
       const files = await buildFiles(state.current, setProgress);
       if (files[0]) downloadBlob(files[0], files[0].name);
     })));
-  if (!isTouch() && navigator.clipboard && window.ClipboardItem) {
+  if (!isTouch() && navigator.clipboard && window.ClipboardItem && !isVideoSlide(currentSlide())) {
     list.append(btn('btn', 'copy', 'Скопировать слайд в буфер', () => run('one', async () => {
       const canvas = await renderExport(currentSlide(), state.current);
       const blob = await canvasToBlob(canvas, 'image/png');
@@ -1886,8 +2357,13 @@ function openExportSheet() {
   }
 
   const L = layoutOf(currentSlide());
+  const videoNote = !videos ? null : h('p', { class: 'sheet-note video-note' },
+    canRecordVideo()
+      ? `Видео (${videos}) записываются в реальном времени — около ${Math.ceil(videoSeconds)} с, 1080 px, в ${videoExt().toUpperCase()}. Не сворачивайте вкладку, пока идёт запись.` +
+        (videoExt() === 'webm' ? ' Instagram не принимает WEBM — для видео лучше Safari или Chrome.' : '')
+      : 'Этот браузер не умеет записывать видео — видео-слайды сохранятся картинкой. Откройте конструктор в Chrome или Safari.');
   const body = h('div', {},
-    h('div', { class: 'sheet-group' }, list, progress, note),
+    h('div', { class: 'sheet-group' }, list, progress, note, videoNote),
     h('div', { class: 'sheet-group' },
       h('h4', { text: 'Формат' }),
       segControl([['png', 'PNG'], ['jpeg', 'JPG']], state.exportFormat, v => { state.exportFormat = v; savePrefs(); }),
@@ -1925,6 +2401,7 @@ function viewerIndex() {
 
 function openViewer() {
   if (!state.project) return;
+  stopPlayback();
   const slides = state.project.slides;
   viewer.el.hidden = false;
   const boxW = viewer.track.clientWidth, boxH = viewer.track.clientHeight;
@@ -1958,14 +2435,16 @@ function openHelp() {
     <ul>
       <li>На стартовом экране выберите рубрику — откроется обложка и пара карточек по макету.</li>
       <li>Пишите текст в полях под превью: слайд обновляется сразу. Бледный текст на слайде — подсказка, в готовую картинку он не попадёт.</li>
-      <li>«Добавить фото» на превью или в блоке «Фото». Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.</li>
+      <li>«Фото или видео» на превью или в блоке «Фото». Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.</li>
       <li>Кадр двигается пальцем (или мышью) прямо на превью, щипок или колесо — масштаб.</li>
+      <li>Видео ставится в то же место, что и фото. Ползунки «Начало» и «Конец» задают фрагмент (в карусели Instagram — до 60 с), «▶» на превью проигрывает его прямо в макете.</li>
       <li>«+» в ленте — новый слайд любого макета, в том числе из другой рубрики. Нажмите на текущий слайд в ленте ещё раз — меню: дублировать, переставить, удалить.</li>
     </ul>
     <h4>Если текст не помещается</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
     <h4>Сохранить</h4>
-    <p>Кнопка «Готово» вверху. На телефоне — «Сохранить в Фото / отправить»: в системном окне выберите «Сохранить изображения» или сразу Instagram/Telegram. На компьютере — ZIP или по одному файлу, PNG или JPG, 1440×1800 (как в макете) или 1080×1350.</p>
+    <p>Кнопка «Сохранить» вверху. На телефоне — «Сохранить в Фото / отправить»: в системном окне выберите «Сохранить» или сразу Instagram/Telegram. На компьютере — ZIP или по одному файлу, PNG или JPG, 1440×1800 (как в макете) или 1080×1350.</p>
+    <p>Слайды с видео сохраняются роликом MP4 1080 px со звуком (в Firefox — WEBM). Ролик записывается в реальном времени, поэтому 15-секундный фрагмент пишется 15 секунд — не сворачивайте вкладку.</p>
     <h4>Черновики</h4>
     <p>Всё сохраняется само — и тексты, и фото — в этом браузере. Черновики видны на стартовом экране. «Настройки → Сохранить файл» — чтобы продолжить на другом устройстве (без фото).</p>
     <h4>Горячие клавиши</h4>
@@ -2023,7 +2502,17 @@ function renderHome() {
       if (first.photo) {
         idbGet(d.id + '/' + first.photo.id).then(async blob => {
           if (!(blob instanceof Blob)) return;
-          try { const img = await decodeBlob(blob); const small = downscale(img, 600); releaseImage(img); paint(small); } catch { /* без фото */ }
+          try {
+            if (/^video\//.test(blob.type)) {
+              const vm = await createVideoMedia(blob);
+              await seekVideo(vm.prev, Number(first.photo.start) || 0);
+              const small = downscale(vm.prev, 600);
+              releaseVideo(vm.prev);
+              paint(small);
+              return;
+            }
+            const img = await decodeBlob(blob); const small = downscale(img, 600); releaseImage(img); paint(small);
+          } catch { /* без фото */ }
         });
       }
     }
@@ -2057,6 +2546,7 @@ function renderHome() {
 }
 
 function showHome() {
+  stopPlayback();
   if (state.project) {
     saveProject();
     const keep = new Set(state.project.slides.map(s => s.photo && s.photo.id).filter(Boolean));
@@ -2236,7 +2726,10 @@ function wireEvents() {
   else if (wideQuery.addListener) wideQuery.addListener(onWide);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && state.project) saveProject();
+    if (document.visibilityState === 'hidden') {
+      stopPlayback();
+      if (state.project) saveProject();
+    }
   });
   window.addEventListener('pagehide', () => { if (state.project) saveProject(); });
   window.addEventListener('beforeunload', e => {

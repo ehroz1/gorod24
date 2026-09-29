@@ -98,7 +98,7 @@ against the Figma screenshots and matches (line breaks differ only where
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
   slide: `{id, layout, fields{}, opts{arrow, shade}, size{title, body},
-  photo: {id, zoom, x, y} | null}`. Switching layout keeps all `fields`, so
+  photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
 - Drafts: `localStorage['g24.drafts.v1']`, newest first, max 60,
@@ -124,6 +124,31 @@ against the Figma screenshots and matches (line breaks differ only where
   stores the clamped offsets after a gesture.
 - Multi-select photos (`addPhotos`) fill photo-capable slides from the
   current one and append rubric cards for the rest.
+- **Video** uses the same photo slot. `media.get(id)` for a video is
+  `{kind: 'video', blob, prev: <video> (never in the DOM), w, h, duration}`;
+  render.js draws the element's current frame like an image (`mediaSize`
+  reads `videoWidth`). The clip lives on the slide
+  (`photo.start/end`, `clipOf()` clamps it), so duplicates sharing one video
+  can have different clips. Stage playback (`togglePlayback`) is an rAF loop
+  (~30 fps `renderStage`) that wraps `currentTime` back to `start`;
+  `renderOverlay` only touches the DOM when its key changes — rebuilding the
+  play button every frame made it unclickable.
+- **Video export** (`recordVideoSlide`): 1080-wide canvas →
+  `captureStream(30)` + MediaRecorder (`RECORDER_TYPES`: MP4 first, WebM
+  fallback), redrawing `renderSlide` every rAF while the clip plays. Audio via
+  Web Audio (`audioSource` = one `createMediaElementSource` per element →
+  `MediaStreamDestination`), because Safari has no `video.captureStream()`.
+  Once the source node exists the element is heard only through the graph,
+  so recording is silent and preview playback connects it to
+  `audioCtx.destination`. `primeVideoAudio()` runs synchronously inside the
+  export tap (iOS needs a gesture for AudioContext/unmuted play) and calls
+  `play(); pause()` back to back — an async `.then(pause)` there used to
+  land mid-recording and freeze the export on the first frame. Stop only
+  `STOP_GRACE_MS` after `onstart` (earlier `stop()` gives an empty file).
+  Video slides export one after another (real time), progress is weighted
+  by clip length. MediaRecorder MP4 is fragmented — seeking inside it may
+  not work in some players, playback does; verify exports by playing, not
+  by seeking.
 - Export (`openExportSheet`): Web Share with files first (on iOS that is
   «Сохранить изображения» → Photos); if Safari rejects `share()` because
   rendering took too long after the tap (`NotAllowedError`), a second button
