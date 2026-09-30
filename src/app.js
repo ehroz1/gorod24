@@ -1234,6 +1234,25 @@ function setOpt(key, value, undoKey) {
   scheduleSave();
 }
 
+/* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
+function setTone(on) {
+  const slide = currentSlide();
+  pushUndo();
+  if (on) slide.opts.tone = 'brand';
+  else delete slide.opts.tone;
+  commit({ panel: true });
+}
+
+function setToneAll(on) {
+  pushUndo();
+  for (const slide of state.project.slides) {
+    if (on) slide.opts.tone = 'brand';
+    else delete slide.opts.tone;
+  }
+  commit({ panel: true });
+  say(on ? 'Фирменный цвет — на всех слайдах' : 'Фирменный цвет убран со всех слайдов');
+}
+
 function setSize(group, value) {
   const slide = currentSlide();
   pushUndo('size:' + slide.id + ':' + group);
@@ -1869,6 +1888,16 @@ function buildSlideForm() {
 
   // оформление
   const look = [];
+  const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
+  tone.querySelector('.lbl').prepend(h('span', { class: 'swatch', 'aria-hidden': 'true' }));
+  look.push(tone, h('p', { class: 'field-hint tone-hint', text: L.photo && L.shade
+    ? 'Текст и плашки — кремовым #FEF3BD, логотип остаётся белым.'
+    : 'Фон карточки — кремовый #FEF3BD, текст остаётся тёмным.' }));
+  // предлагаем распространить выбор, только если другие слайды отличаются
+  const on = brandTone(slide);
+  if (state.project.slides.some(x => brandTone(x) !== on)) {
+    look.push(btn('btn btn-ghost btn-sm', null, on ? 'Сделать так на всех слайдах' : 'Убрать со всех слайдов', () => setToneAll(on)));
+  }
   if (L.arrow) look.push(switchRow('Стрелка «листай»', arrowOn(slide, L), v => setOpt('arrow', v)));
   if (L.shade) {
     const v = Math.round(shadeStrength(slide, L) * 100);

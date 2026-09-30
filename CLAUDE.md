@@ -74,6 +74,12 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   frame, paper clip. Only `brand/photo-stack.png` and the logo are bitmaps.
 - Logo is a **mask**: `brand/logo.png` is a white mark; `app.js` tints it
   white/black (`tint`) like the Figma mask+fill.
+- **Brand tone** (`slide.opts.tone === 'brand'`, «Фирменный цвет»):
+  every render function takes light text/arrows from `ink(slide)` and
+  plates / white card backgrounds from `paper(slide)`, which return
+  `BRAND_CREAM` (#FEF3BD) instead of white. Logos keep `WHITE`/`BLACK`
+  (they pick the tinted asset), dark text on plates stays black. New
+  layouts must use `ink()`/`paper()` rather than `WHITE` for those roles.
 - Empty fields render as **ghost placeholders** (alpha `GHOST_ALPHA`) when
   `env.ghost` is true (stage, thumbnails); export passes `ghost: false`.
   Overflow checks (`real()`) ignore ghosts.
@@ -104,7 +110,7 @@ against the Figma screenshots and matches (line breaks differ only where
 ### `src/app.js` — UI and state
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
-  slide: `{id, layout, fields{}, opts{arrow, shade}, size{title, body},
+  slide: `{id, layout, fields{}, opts{arrow, shade, tone}, size{title, body},
   photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).

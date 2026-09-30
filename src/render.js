@@ -40,6 +40,16 @@ const FONT_STRETCH = { title: 1, display: 1, body: 1 };
 const INTER_LEAD = 1.21;   // «normal» межстрочный у Inter в Figma
 
 const WHITE = '#ffffff';
+// Фирменный кремовый: по переключателю «Фирменный цвет» им красятся светлый
+// текст и стрелки на тёмных слайдах, плашки и белый фон карточек.
+// Логотип остаётся белым/чёрным, как в макете.
+const BRAND_CREAM = '#FEF3BD';
+
+function brandTone(slide) { return Boolean(slide && slide.opts && slide.opts.tone === 'brand'); }
+/* Светлый текст и стрелка поверх фото. */
+function ink(slide) { return brandTone(slide) ? BRAND_CREAM : WHITE; }
+/* Плашки и белый фон карточек (текст на них остаётся чёрным). */
+function paper(slide) { return brandTone(slide) ? BRAND_CREAM : WHITE; }
 const BLACK = '#000000';
 const EVENT_RED = '#700004';
 
@@ -540,7 +550,7 @@ function renderCover(ctx, slide, env, L, spec) {
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShade(ctx, W, H, spec.shadeTop, shadeStrength(slide, L));
   drawLogo(ctx, env, spec.logo || LOGO_BOX, WHITE);
-  if (arrowOn(slide, L)) drawArrow(ctx, WHITE);
+  if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
 
   const center = spec.align === 'center';
   const maxW = spec.maxW || COL_W;
@@ -549,8 +559,8 @@ function renderCover(ctx, slide, env, L, spec) {
   const sub = fieldBlock(ctx, slide, env, L, 'subtitle', spec.sub, 'body', maxW);
   const items = [{ block: title }, { block: sub, gapAbove: spec.gap || 60 }];
   const top = stackUp(items, COVER_BOTTOM);
-  drawBlock(ctx, title, x, items[0].top, WHITE, spec.align, alphaOf(title));
-  drawBlock(ctx, sub, x, items[1].top, WHITE, spec.align, alphaOf(sub));
+  drawBlock(ctx, title, x, items[0].top, ink(slide), spec.align, alphaOf(title));
+  drawBlock(ctx, sub, x, items[1].top, ink(slide), spec.align, alphaOf(sub));
   const overflow = (real(title) || real(sub)) && top < LOGO_SAFE;
   return { overflow, photo };
 }
@@ -571,7 +581,7 @@ function arrowOn(slide, L) {
    логотип внизу справа. */
 function renderInterviewCard(ctx, slide, env, L) {
   const { W, H } = L;
-  ctx.fillStyle = WHITE; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, LOGO_BOX_BOTTOM, BLACK);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card150, 'title', COL_W);
@@ -586,7 +596,7 @@ function renderInterviewCard(ctx, slide, env, L) {
 /* Любимые места — карточка: стопка фотографий, текст по центру, стрелка. */
 function renderFavoriteCard(ctx, slide, env, L) {
   const { W, H } = L;
-  ctx.fillStyle = WHITE; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, { x: 1198, y: 149, w: 152, h: 130 }, BLACK);
   if (env.assets.stack) ctx.drawImage(env.assets.stack, STACK.x, STACK.y, STACK.w, STACK.h);
@@ -620,7 +630,7 @@ function renderNewPlaceCard(ctx, slide, env, L) {
     ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
     ctx.shadowBlur = 4 * (env.k || 1);
     ctx.shadowOffsetY = 4 * (env.k || 1);
-    ctx.fillStyle = WHITE;
+    ctx.fillStyle = paper(slide);
     ctx.globalAlpha = body.ghost ? Math.min(1, body.alpha + 0.5) : 1;
     roundRect(ctx, MARGIN, boxTop, COL_W, boxH, 35);
     ctx.fill();
@@ -630,8 +640,8 @@ function renderNewPlaceCard(ctx, slide, env, L) {
   }
   const items = [{ block: title }, { block: addr, gapAbove: 25 }];
   const top = stackUp(items, y);
-  drawBlock(ctx, title, MARGIN, items[0].top, WHITE, 'left', alphaOf(title));
-  drawBlock(ctx, addr, MARGIN, items[1].top, WHITE, 'left', alphaOf(addr));
+  drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), 'left', alphaOf(title));
+  drawBlock(ctx, addr, MARGIN, items[1].top, ink(slide), 'left', alphaOf(addr));
   const any = real(title) || real(addr) || real(body);
   return { overflow: any && Math.min(top, boxTop) < LOGO_SAFE, photo };
 }
@@ -663,16 +673,16 @@ function renderEventsCover(ctx, slide, env, L) {
   let bottom = COVER_BOTTOM;
   if (dates.lines.length) {
     const datesTop = COVER_BOTTOM - dates.height;
-    drawBlock(ctx, dates, MARGIN, datesTop, WHITE, 'left', alphaOf(dates));
+    drawBlock(ctx, dates, MARGIN, datesTop, ink(slide), 'left', alphaOf(dates));
     bottom = datesTop - 100;
-    if (arrowOn(slide, L)) drawArrow(ctx, WHITE, datesTop + dates.cap / 2);
+    if (arrowOn(slide, L)) drawArrow(ctx, ink(slide), datesTop + dates.cap / 2);
   } else if (arrowOn(slide, L)) {
-    drawArrow(ctx, WHITE);
+    drawArrow(ctx, ink(slide));
   }
   const numTop = bottom - num.height;
   const labelTop = bottom - label.height;
-  drawBlock(ctx, num, MARGIN, numTop, WHITE, 'left', alphaOf(num));
-  drawBlock(ctx, label, labelX, labelTop, WHITE, 'left', alphaOf(label));
+  drawBlock(ctx, num, MARGIN, numTop, ink(slide), 'left', alphaOf(num));
+  drawBlock(ctx, label, labelX, labelTop, ink(slide), 'left', alphaOf(label));
   const any = real(num) || real(label) || real(dates);
   const top = Math.min(num.lines.length ? numTop : bottom, label.lines.length ? labelTop : bottom);
   const tooWide = real(num) && num.width > 1260 - 300;
@@ -683,7 +693,7 @@ function renderEventsCover(ctx, slide, env, L) {
    снизу описание. */
 function renderEventCard(ctx, slide, env, L) {
   const { W, H } = L;
-  ctx.fillStyle = WHITE; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, LOGO_BOX, BLACK);
   drawPolaroidFrame(ctx, env);
@@ -714,7 +724,7 @@ function renderEventCard(ctx, slide, env, L) {
    объём текста (текст прижат к низу, от фото до заголовка — 126). */
 function renderCommerceTop(ctx, slide, env, L) {
   const { W, H } = L;
-  ctx.fillStyle = WHITE; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card120, 'title', COL_W);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', COL_W);
@@ -740,7 +750,7 @@ function renderCommerceTop(ctx, slide, env, L) {
 /* Коммерция — карточка с фото снизу: текст сверху, под ним фото до низа. */
 function renderCommerceBottom(ctx, slide, env, L) {
   const { W, H } = L;
-  ctx.fillStyle = WHITE; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card120, 'title', COL_W);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', COL_W);
@@ -774,7 +784,7 @@ function renderKinoCard(ctx, slide, env, L) {
   let top = y;
   if (body.lines.length) {
     top = y - body.height;
-    drawBlock(ctx, body, MARGIN, top, WHITE, 'left', alphaOf(body));
+    drawBlock(ctx, body, MARGIN, top, ink(slide), 'left', alphaOf(body));
     y = top - 38;
   }
   if (badge.lines.length) {
@@ -786,7 +796,7 @@ function renderKinoCard(ctx, slide, env, L) {
     const boxTop = y - boxH;
     ctx.save();
     ctx.globalAlpha = badge.ghost ? Math.min(1, badge.alpha + 0.5) : 1;
-    ctx.fillStyle = WHITE;
+    ctx.fillStyle = paper(slide);
     roundRect(ctx, MARGIN, boxTop, boxW, boxH, boxH / 2);
     ctx.fill();
     ctx.restore();
@@ -796,7 +806,7 @@ function renderKinoCard(ctx, slide, env, L) {
   }
   if (title.lines.length) {
     top = y - title.height;
-    drawBlock(ctx, title, MARGIN, top, WHITE, 'left', alphaOf(title));
+    drawBlock(ctx, title, MARGIN, top, ink(slide), 'left', alphaOf(title));
   }
   const any = real(title) || real(badge) || real(body);
   return { overflow: any && top < LOGO_SAFE, photo };
@@ -811,7 +821,7 @@ function renderPost(ctx, slide, env, L) {
   const maxW = 1135;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.post200, 'title', maxW);
   const top = COVER_BOTTOM - title.height;
-  drawBlock(ctx, title, (W - maxW) / 2, top, WHITE, 'center', alphaOf(title));
+  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), 'center', alphaOf(title));
   return { overflow: real(title) && top < LOGO_SAFE, photo };
 }
 
@@ -824,7 +834,7 @@ function renderReels(ctx, slide, env, L) {
   const maxW = 741;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.reels150, 'title', maxW);
   const top = 1493 - title.height;
-  drawBlock(ctx, title, (W - maxW) / 2, top, WHITE, 'center', alphaOf(title));
+  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), 'center', alphaOf(title));
   return { overflow: real(title) && top < 680, photo };
 }
 
