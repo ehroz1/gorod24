@@ -50,6 +50,8 @@ const RUBRICS = [
     slides: ['new-cover', 'new-card', 'new-card'], card: 'new-card', layouts: ['new-cover', 'new-card'] },
   { id: 'ev', name: 'Мероприятия', desc: 'Афиша недели: обложка и события',
     slides: ['ev-cover', 'ev-card', 'ev-card'], card: 'ev-card', layouts: ['ev-cover', 'ev-card'] },
+  { id: 'kino', name: 'Киноафиша', desc: 'Премьеры: обложка и карточки фильмов',
+    slides: ['kino-cover', 'kino-card', 'kino-card'], card: 'kino-card', layouts: ['kino-cover', 'kino-card'] },
   { id: 'com', name: 'Коммерция', desc: 'Рекламный пост: фото сверху или снизу',
     slides: ['com-cover', 'com-top', 'com-bottom'], card: 'com-top', layouts: ['com-cover', 'com-top', 'com-bottom'] },
   { id: 'post', name: 'Пост', desc: 'Одна картинка с крупным заголовком',
@@ -70,12 +72,14 @@ const FIELD_INFO = {
   dates: { label: 'Даты', group: 'body' },
   date: { label: 'Дата', group: 'body', hint: '📅 добавится сам' },
   place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам' },
+  badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»' },
 };
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
   'new-card': { title: 'Название заведения', body: 'Описание (белая плашка)' },
   'ev-card': { title: 'Название события', body: 'Описание' },
   'fav-card': { body: 'Текст под фото' },
+  'kino-card': { title: 'Название фильма', body: 'Описание' },
 };
 
 const el = {};

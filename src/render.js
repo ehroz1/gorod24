@@ -423,6 +423,12 @@ const T = {
   body50t: { font: 'body', size: 50, track: -3 },
   address50: { font: 'body', size: 50, track: -3 },
   dates120: { font: 'body', size: 120, track: -3 },
+  // Киноафиша: кегли выведены из размеров текстовых блоков макета
+  // (высота прописных и ширина строки при BravoRG / Inter)
+  kino191: { font: 'title', size: 191, lead: 165, track: -3.8 },
+  kino103: { font: 'title', size: 103, lead: 95, track: -2 },
+  kino150: { font: 'title', size: 150, lead: 108, track: -3 },
+  body42: { font: 'body', size: 42, track: -2.1 },
 };
 
 /* ------------------------------------------------------- поля слайда */
@@ -455,6 +461,7 @@ const PLACEHOLDERS = {
   dates: '21.09-27.09',
   date: '19 сентября-7 октября',
   place: 'Место проведения',
+  badge: 'Премьера: 17 сентября',
 };
 
 const GHOST_ALPHA = 0.38;
@@ -532,7 +539,7 @@ function renderCover(ctx, slide, env, L, spec) {
   const { W, H } = L;
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShade(ctx, W, H, spec.shadeTop, shadeStrength(slide, L));
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawLogo(ctx, env, spec.logo || LOGO_BOX, WHITE);
   if (arrowOn(slide, L)) drawArrow(ctx, WHITE);
 
   const center = spec.align === 'center';
@@ -540,7 +547,7 @@ function renderCover(ctx, slide, env, L, spec) {
   const x = center ? (W - maxW) / 2 : MARGIN;
   const title = fieldBlock(ctx, slide, env, L, 'title', spec.title, 'title', maxW);
   const sub = fieldBlock(ctx, slide, env, L, 'subtitle', spec.sub, 'body', maxW);
-  const items = [{ block: title }, { block: sub, gapAbove: 60 }];
+  const items = [{ block: title }, { block: sub, gapAbove: spec.gap || 60 }];
   const top = stackUp(items, COVER_BOTTOM);
   drawBlock(ctx, title, x, items[0].top, WHITE, spec.align, alphaOf(title));
   drawBlock(ctx, sub, x, items[1].top, WHITE, spec.align, alphaOf(sub));
@@ -751,6 +758,50 @@ function renderCommerceBottom(ctx, slide, env, L) {
   return { overflow, photo };
 }
 
+/* Киноафиша — карточка фильма: кадр на весь слайд, тень, название,
+   белая плашка («Премьера: 17 сентября») и описание, всё прижато к низу. */
+function renderKinoCard(ctx, slide, env, L) {
+  const { W, H } = L;
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShade(ctx, W, H, 853, shadeStrength(slide, L));
+  drawLogo(ctx, env, LOGO_BOX, WHITE);
+
+  const title = fieldBlock(ctx, slide, env, L, 'title', T.kino150, 'title', COL_W);
+  const badge = fieldBlock(ctx, slide, env, L, 'badge', T.body42, 'body', COL_W - 120);
+  const body = fieldBlock(ctx, slide, env, L, 'body', T.body42, 'body', COL_W);
+
+  let y = COVER_BOTTOM;
+  let top = y;
+  if (body.lines.length) {
+    top = y - body.height;
+    drawBlock(ctx, body, MARGIN, top, WHITE, 'left', alphaOf(body));
+    y = top - 38;
+  }
+  if (badge.lines.length) {
+    // плашка: поля 57 по бокам, 21 над прописными и 22 под строкой — как в макете
+    const scale = badge.size / 42;
+    const padX = 57 * scale, padTop = 21 * scale, padBottom = 22 * scale;
+    const boxH = badge.height + padTop + padBottom;
+    const boxW = badge.width + padX * 2 + 5 * scale;
+    const boxTop = y - boxH;
+    ctx.save();
+    ctx.globalAlpha = badge.ghost ? Math.min(1, badge.alpha + 0.5) : 1;
+    ctx.fillStyle = WHITE;
+    roundRect(ctx, MARGIN, boxTop, boxW, boxH, boxH / 2);
+    ctx.fill();
+    ctx.restore();
+    drawBlock(ctx, badge, MARGIN + padX, boxTop + padTop, BLACK, 'left', alphaOf(badge));
+    top = boxTop;
+    y = boxTop - 60;
+  }
+  if (title.lines.length) {
+    top = y - title.height;
+    drawBlock(ctx, title, MARGIN, top, WHITE, 'left', alphaOf(title));
+  }
+  const any = real(title) || real(badge) || real(body);
+  return { overflow: any && top < LOGO_SAFE, photo };
+}
+
 /* Пост: заголовок крупно по центру снизу. */
 function renderPost(ctx, slide, env, L) {
   const { W, H } = L;
@@ -858,6 +909,21 @@ const LAYOUTS = {
     fields: ['title', 'body'], photo: true,
     ph: { body: 'Текст карточки: пара-тройка предложений о товаре или услуге.' },
     render: renderCommerceBottom,
+  },
+  'kino-cover': {
+    name: 'Киноафиша — обложка', short: 'Обложка', size: POST,
+    fields: ['title', 'subtitle'], photo: true, shade: true,
+    ph: { title: 'Киноафиша Узбекистана', subtitle: 'Самые ожидаемые премьеры сентября' },
+    render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
+      shadeTop: 882, align: 'center', maxW: 1260, gap: 35,
+      logo: { x: 644, y: 148, w: 152, h: 130 },   // логотип по центру
+      title: T.kino191, sub: T.kino103 }),
+  },
+  'kino-card': {
+    name: 'Киноафиша — фильм', short: 'Фильм', size: POST,
+    fields: ['title', 'badge', 'body'], photo: true, shade: true,
+    ph: { title: 'Название фильма', body: 'Коротко о фильме: жанр, режиссёр, чем зацепит и для кого.' },
+    render: renderKinoCard,
   },
   'post': {
     name: 'Пост', short: 'Пост', size: POST,

@@ -55,9 +55,16 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 - `LAYOUTS` is the single source of truth: `fields` (form order), `photo`,
   `shade`, `arrow` (`'on'` = shown by default), `ph` (placeholders; may be a
   function of `env`, used for «02. Заголовок» numbering) and `render`.
-  14 layouts = every frame of the Figma page. Covers share `renderCover`
-  (bottom-anchored stack: last baseline at y=1650, 60 between title and
-  subtitle).
+  16 layouts = every frame of the Figma page (page `277:2` plus the
+  «Киноафиша» section `304:192`). Covers share `renderCover`
+  (bottom-anchored stack: last baseline at y=1650, `gap` — 60 by default —
+  between title and subtitle; `logo` overrides the logo box, e.g. the
+  centred one on the Киноафиша cover). Киноафиша was built from Figma
+  *metadata only* (the MCP quota ran out before `get_design_context`): font
+  sizes were derived from text-box heights/widths (BravoRG 191/103/150,
+  Inter 42) and match the node positions within 1px, but colours — white
+  text, white pill badge with black text — are assumptions; re-check them
+  against a screenshot when the quota allows.
 - Photos: `drawPhotoRect` / `drawPhotoQuad` (rotated slot, `bleed` hides the
   black placeholder edge) → `drawCover` = object-fit: cover with
   `transform {zoom, x, y}`; `x/y` are design units from centre, clamped so no
