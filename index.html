@@ -460,6 +460,12 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .field-label { font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
 .field-label .muted { font-weight: 500; }
 .field-hint { color: var(--muted); font-size: 12.5px; }
+.field-tools { display: inline-flex; align-items: center; gap: 10px; font-weight: 500; }
+.field.off .input, .field.off .textarea { opacity: .45; }
+.field.off .field-label > span:first-child { color: var(--muted); text-decoration: line-through; }
+.switch.sm { width: 40px; height: 24px; }
+.switch.sm span::after { width: 18px; height: 18px; }
+.switch.sm input:checked + span::after { transform: translateX(16px); }
 .input, .textarea {
   width: 100%; border: 1px solid var(--line-strong); border-radius: 12px;
   background: var(--input); color: var(--text);
@@ -1347,10 +1353,16 @@ const T = {
  * В экспорте (env.ghost = false) пустое поле просто не рисуется.
  */
 function fieldText(slide, env, key, layout) {
+  // строка выключена переключателем в форме — не рисуем ни текст, ни подсказку
+  if (isHidden(slide, key)) return { text: '', ghost: false };
   const v = (slide.fields && slide.fields[key]) || '';
   if (v.trim()) return { text: v, ghost: false };
   if (env.ghost) return { text: placeholderFor(layout, key, env), ghost: true };
   return { text: '', ghost: false };
+}
+
+function isHidden(slide, key) {
+  return Boolean(slide && slide.opts && slide.opts.hidden && slide.opts.hidden[key]);
 }
 
 /* Подсказка для пустого поля: у макета может быть своя (строка или функция). */
@@ -1368,8 +1380,9 @@ const PLACEHOLDERS = {
   number: '11',
   label: 'мероприятий\nнедели в Астане',
   dates: '21.09-27.09',
-  date: '19 сентября-7 октября',
+  date: '2 октября в 19:00',
   place: 'Место проведения',
+  price: '3000 тенге',
   badge: 'Премьера: 17 сентября',
 };
 
@@ -1601,9 +1614,16 @@ function renderEventCard(ctx, slide, env, L) {
 
   const colX = 796, colW = 554;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.event120, 'title', colW);
-  const date = fieldBlock(ctx, slide, env, L, 'date', T.event65, 'body', colW, withEmoji('📅', true));
-  const place = fieldBlock(ctx, slide, env, L, 'place', T.event65, 'body', 457, withEmoji('📍', false));
-  const items = [{ block: title }, { block: date, gapAbove: 89 }, { block: place, gapAbove: 50 }];
+  // строки «когда / где / сколько стоит»: каждую можно выключить в форме,
+  // тогда следующие поднимаются на её место
+  const date = fieldBlock(ctx, slide, env, L, 'date', T.event65, 'body', colW, withEmoji('🗓️', true));
+  const place = fieldBlock(ctx, slide, env, L, 'place', T.event65, 'body', 457, withEmoji('📍', true));
+  const price = fieldBlock(ctx, slide, env, L, 'price', T.event65, 'body', colW, withEmoji('💵', true));
+  const items = [{ block: title }, { block: date, gapAbove: 89 }, { block: place, gapAbove: 50 },
+                 { block: price, gapAbove: 50 }];
+  // первая строка после названия всегда отстоит на 89, как дата в макете
+  const firstInfo = items.slice(1).find(i => i.block.lines.length);
+  if (firstInfo) firstInfo.gapAbove = 89;
   // колонка центрируется по высоте полароида (центр ≈ 682), но не выше логотипа
   const h = stackDown(items.map(i => Object.assign({}, i)), 0);
   let colTop = Math.max(LOGO_SAFE, 682 - h / 2);
@@ -1611,10 +1631,11 @@ function renderEventCard(ctx, slide, env, L) {
   drawBlock(ctx, title, colX, items[0].top, EVENT_RED, 'left', alphaOf(title));
   drawBlock(ctx, date, colX, items[1].top, BLACK, 'left', alphaOf(date));
   drawBlock(ctx, place, colX, items[2].top, BLACK, 'left', alphaOf(place));
+  drawBlock(ctx, price, colX, items[3].top, BLACK, 'left', alphaOf(price));
 
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
   drawBlock(ctx, body, 88, 1309, BLACK, 'left', alphaOf(body));
-  const colOverflow = (real(title) || real(date) || real(place)) && colBottom > 1240;
+  const colOverflow = (real(title) || real(date) || real(place) || real(price)) && colBottom > 1240;
   const bodyOverflow = real(body) && 1309 + body.height > 1710;
   return { overflow: colOverflow || bodyOverflow, photo };
 }
@@ -1797,8 +1818,8 @@ const LAYOUTS = {
   },
   'ev-card': {
     name: 'Мероприятия — карточка', short: 'Событие', size: POST,
-    fields: ['title', 'date', 'place', 'body'], photo: true,
-    ph: { title: 'Название\nсобытия', body: 'Описание события: что, где и почему стоит сходить.' },
+    fields: ['title', 'date', 'place', 'price', 'body'], photo: true,
+    ph: { title: 'Название\nсобытия', place: 'WE Kitchen', body: 'Описание события: что, где и почему стоит сходить.' },
     render: renderEventCard,
   },
   'com-cover': {
@@ -1945,13 +1966,14 @@ const FIELD_INFO = {
   title: { label: 'Заголовок', multiline: true, group: 'title', hint: 'Enter — перенос строки' },
   subtitle: { label: 'Подзаголовок', multiline: true, group: 'body' },
   body: { label: 'Текст', multiline: true, big: true, group: 'body', hint: 'Пустая строка — новый абзац' },
-  address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам' },
+  address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам', optional: true },
   number: { label: 'Число', group: 'title', inputmode: 'numeric' },
   label: { label: 'Подпись к числу', multiline: true, group: 'title' },
   dates: { label: 'Даты', group: 'body' },
-  date: { label: 'Дата', group: 'body', hint: '📅 добавится сам' },
-  place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам' },
-  badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»' },
+  date: { label: 'Дата и время', group: 'body', hint: '🗓️ добавится сам', optional: true },
+  place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
+  price: { label: 'Цена', group: 'body', hint: '💵 добавится сам', optional: true },
+  badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»', optional: true },
 };
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
@@ -3113,6 +3135,19 @@ function setOpt(key, value, undoKey) {
   scheduleSave();
 }
 
+/* Выключенная строка (дата, место, цена…) не рисуется, но текст в ней сохраняется. */
+function setHidden(key, hidden) {
+  const slide = currentSlide();
+  pushUndo();
+  const map = Object.assign({}, slide.opts.hidden);
+  if (hidden) map[key] = true;
+  else delete map[key];
+  if (Object.keys(map).length) slide.opts.hidden = map;
+  else delete slide.opts.hidden;
+  scheduleRender();
+  scheduleSave();
+}
+
 /* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
 function setTone(on) {
   const slide = currentSlide();
@@ -3708,9 +3743,26 @@ function buildField(slide, key, index) {
     control.addEventListener('keydown', e => { if (e.key === 'Enter') control.blur(); });
   }
   control.dataset.field = key;
-  return h('label', { class: 'field' },
-    h('span', { class: 'field-label' }, h('span', { text: label }), info.hint ? h('span', { class: 'muted small', text: info.hint }) : null),
+  const hint = info.hint ? h('span', { class: 'muted small', text: info.hint }) : null;
+  if (!info.optional) {
+    return h('label', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: label }), hint),
+      control);
+  }
+  // необязательная строка: переключатель «показывать» рядом с подписью.
+  // Обёртка — div, а не label: иначе нажатие на подпись щёлкало бы переключатель.
+  const shown = !isHidden(slide, key);
+  const toggle = h('input', { type: 'checkbox', checked: shown, 'aria-label': `Показывать «${label}» на слайде` });
+  const wrap = h('div', { class: 'field optional' + (shown ? '' : ' off') },
+    h('span', { class: 'field-label' },
+      h('span', { text: label }),
+      h('span', { class: 'field-tools' }, hint, h('span', { class: 'switch sm' }, toggle, h('span')))),
     control);
+  toggle.addEventListener('change', () => {
+    setHidden(key, !toggle.checked);
+    wrap.classList.toggle('off', !toggle.checked);
+  });
+  return wrap;
 }
 
 function rangeRow(label, { min, max, step = 1, value, unit = '', onInput, onChange, key }) {

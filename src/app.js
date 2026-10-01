@@ -66,13 +66,14 @@ const FIELD_INFO = {
   title: { label: 'Заголовок', multiline: true, group: 'title', hint: 'Enter — перенос строки' },
   subtitle: { label: 'Подзаголовок', multiline: true, group: 'body' },
   body: { label: 'Текст', multiline: true, big: true, group: 'body', hint: 'Пустая строка — новый абзац' },
-  address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам' },
+  address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам', optional: true },
   number: { label: 'Число', group: 'title', inputmode: 'numeric' },
   label: { label: 'Подпись к числу', multiline: true, group: 'title' },
   dates: { label: 'Даты', group: 'body' },
-  date: { label: 'Дата', group: 'body', hint: '📅 добавится сам' },
-  place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам' },
-  badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»' },
+  date: { label: 'Дата и время', group: 'body', hint: '🗓️ добавится сам', optional: true },
+  place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
+  price: { label: 'Цена', group: 'body', hint: '💵 добавится сам', optional: true },
+  badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»', optional: true },
 };
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
@@ -1234,6 +1235,19 @@ function setOpt(key, value, undoKey) {
   scheduleSave();
 }
 
+/* Выключенная строка (дата, место, цена…) не рисуется, но текст в ней сохраняется. */
+function setHidden(key, hidden) {
+  const slide = currentSlide();
+  pushUndo();
+  const map = Object.assign({}, slide.opts.hidden);
+  if (hidden) map[key] = true;
+  else delete map[key];
+  if (Object.keys(map).length) slide.opts.hidden = map;
+  else delete slide.opts.hidden;
+  scheduleRender();
+  scheduleSave();
+}
+
 /* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
 function setTone(on) {
   const slide = currentSlide();
@@ -1829,9 +1843,26 @@ function buildField(slide, key, index) {
     control.addEventListener('keydown', e => { if (e.key === 'Enter') control.blur(); });
   }
   control.dataset.field = key;
-  return h('label', { class: 'field' },
-    h('span', { class: 'field-label' }, h('span', { text: label }), info.hint ? h('span', { class: 'muted small', text: info.hint }) : null),
+  const hint = info.hint ? h('span', { class: 'muted small', text: info.hint }) : null;
+  if (!info.optional) {
+    return h('label', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: label }), hint),
+      control);
+  }
+  // необязательная строка: переключатель «показывать» рядом с подписью.
+  // Обёртка — div, а не label: иначе нажатие на подпись щёлкало бы переключатель.
+  const shown = !isHidden(slide, key);
+  const toggle = h('input', { type: 'checkbox', checked: shown, 'aria-label': `Показывать «${label}» на слайде` });
+  const wrap = h('div', { class: 'field optional' + (shown ? '' : ' off') },
+    h('span', { class: 'field-label' },
+      h('span', { text: label }),
+      h('span', { class: 'field-tools' }, hint, h('span', { class: 'switch sm' }, toggle, h('span')))),
     control);
+  toggle.addEventListener('change', () => {
+    setHidden(key, !toggle.checked);
+    wrap.classList.toggle('off', !toggle.checked);
+  });
+  return wrap;
 }
 
 function rangeRow(label, { min, max, step = 1, value, unit = '', onInput, onChange, key }) {

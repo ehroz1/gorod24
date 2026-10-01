@@ -448,10 +448,16 @@ const T = {
  * В экспорте (env.ghost = false) пустое поле просто не рисуется.
  */
 function fieldText(slide, env, key, layout) {
+  // строка выключена переключателем в форме — не рисуем ни текст, ни подсказку
+  if (isHidden(slide, key)) return { text: '', ghost: false };
   const v = (slide.fields && slide.fields[key]) || '';
   if (v.trim()) return { text: v, ghost: false };
   if (env.ghost) return { text: placeholderFor(layout, key, env), ghost: true };
   return { text: '', ghost: false };
+}
+
+function isHidden(slide, key) {
+  return Boolean(slide && slide.opts && slide.opts.hidden && slide.opts.hidden[key]);
 }
 
 /* Подсказка для пустого поля: у макета может быть своя (строка или функция). */
@@ -469,8 +475,9 @@ const PLACEHOLDERS = {
   number: '11',
   label: 'мероприятий\nнедели в Астане',
   dates: '21.09-27.09',
-  date: '19 сентября-7 октября',
+  date: '2 октября в 19:00',
   place: 'Место проведения',
+  price: '3000 тенге',
   badge: 'Премьера: 17 сентября',
 };
 
@@ -702,9 +709,16 @@ function renderEventCard(ctx, slide, env, L) {
 
   const colX = 796, colW = 554;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.event120, 'title', colW);
-  const date = fieldBlock(ctx, slide, env, L, 'date', T.event65, 'body', colW, withEmoji('📅', true));
-  const place = fieldBlock(ctx, slide, env, L, 'place', T.event65, 'body', 457, withEmoji('📍', false));
-  const items = [{ block: title }, { block: date, gapAbove: 89 }, { block: place, gapAbove: 50 }];
+  // строки «когда / где / сколько стоит»: каждую можно выключить в форме,
+  // тогда следующие поднимаются на её место
+  const date = fieldBlock(ctx, slide, env, L, 'date', T.event65, 'body', colW, withEmoji('🗓️', true));
+  const place = fieldBlock(ctx, slide, env, L, 'place', T.event65, 'body', 457, withEmoji('📍', true));
+  const price = fieldBlock(ctx, slide, env, L, 'price', T.event65, 'body', colW, withEmoji('💵', true));
+  const items = [{ block: title }, { block: date, gapAbove: 89 }, { block: place, gapAbove: 50 },
+                 { block: price, gapAbove: 50 }];
+  // первая строка после названия всегда отстоит на 89, как дата в макете
+  const firstInfo = items.slice(1).find(i => i.block.lines.length);
+  if (firstInfo) firstInfo.gapAbove = 89;
   // колонка центрируется по высоте полароида (центр ≈ 682), но не выше логотипа
   const h = stackDown(items.map(i => Object.assign({}, i)), 0);
   let colTop = Math.max(LOGO_SAFE, 682 - h / 2);
@@ -712,10 +726,11 @@ function renderEventCard(ctx, slide, env, L) {
   drawBlock(ctx, title, colX, items[0].top, EVENT_RED, 'left', alphaOf(title));
   drawBlock(ctx, date, colX, items[1].top, BLACK, 'left', alphaOf(date));
   drawBlock(ctx, place, colX, items[2].top, BLACK, 'left', alphaOf(place));
+  drawBlock(ctx, price, colX, items[3].top, BLACK, 'left', alphaOf(price));
 
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
   drawBlock(ctx, body, 88, 1309, BLACK, 'left', alphaOf(body));
-  const colOverflow = (real(title) || real(date) || real(place)) && colBottom > 1240;
+  const colOverflow = (real(title) || real(date) || real(place) || real(price)) && colBottom > 1240;
   const bodyOverflow = real(body) && 1309 + body.height > 1710;
   return { overflow: colOverflow || bodyOverflow, photo };
 }
@@ -898,8 +913,8 @@ const LAYOUTS = {
   },
   'ev-card': {
     name: 'Мероприятия — карточка', short: 'Событие', size: POST,
-    fields: ['title', 'date', 'place', 'body'], photo: true,
-    ph: { title: 'Название\nсобытия', body: 'Описание события: что, где и почему стоит сходить.' },
+    fields: ['title', 'date', 'place', 'price', 'body'], photo: true,
+    ph: { title: 'Название\nсобытия', place: 'WE Kitchen', body: 'Описание события: что, где и почему стоит сходить.' },
     render: renderEventCard,
   },
   'com-cover': {

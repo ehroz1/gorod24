@@ -80,6 +80,12 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `BRAND_CREAM` (#FEF3BD) instead of white. Logos keep `WHITE`/`BLACK`
   (they pick the tinted asset), dark text on plates stays black. New
   layouts must use `ink()`/`paper()` rather than `WHITE` for those roles.
+- **Optional lines**: fields with `optional: true` in `FIELD_INFO`
+  (date, place, price, address, badge) get an on/off switch in the form;
+  `slide.opts.hidden[key]` makes `fieldText()` return nothing (no text, no
+  ghost) while the typed value is kept. Layouts must stack such blocks so
+  the following ones move up (e.g. `renderEventCard` gives the first visible
+  info line the 89 gap).
 - Empty fields render as **ghost placeholders** (alpha `GHOST_ALPHA`) when
   `env.ghost` is true (stage, thumbnails); export passes `ghost: false`.
   Overflow checks (`real()`) ignore ghosts.
@@ -110,7 +116,7 @@ against the Figma screenshots and matches (line breaks differ only where
 ### `src/app.js` — UI and state
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
-  slide: `{id, layout, fields{}, opts{arrow, shade, tone}, size{title, body},
+  slide: `{id, layout, fields{}, opts{arrow, shade, tone, hidden{}}, size{title, body},
   photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
