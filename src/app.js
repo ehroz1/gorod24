@@ -1248,6 +1248,46 @@ function setHidden(key, hidden) {
   scheduleSave();
 }
 
+/* Доп. блок «заголовок + текст» (см. sectionCount в render.js). */
+function addSection() {
+  const slide = currentSlide();
+  const L = layoutOf(slide);
+  const n = sectionCount(slide, L);
+  if (n >= (L.sections || 1)) return;
+  pushUndo();
+  slide.opts.sections = n + 1;
+  // текст мог остаться от удалённого раньше блока — новый начинается с чистого
+  for (const key of sectionKeys(n + 1)) delete slide.fields[key];
+  commit({ panel: true });
+  // сразу в поле заголовка: клик ещё идёт, так что на iOS откроется клавиатура
+  const input = el.panelBody.querySelector(`[data-field="title${n + 1}"]`);
+  if (input) {
+    input.focus({ preventScroll: true });
+    input.closest('.subblock').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+/* Убрать блок k: следующие блоки сдвигаются на его место. */
+function removeSection(k) {
+  const slide = currentSlide();
+  const L = layoutOf(slide);
+  const n = sectionCount(slide, L);
+  if (k < 2 || k > n) return;
+  pushUndo();
+  for (let j = k; j < n; j++) {
+    sectionKeys(j).forEach((key, idx) => {
+      const from = sectionKeys(j + 1)[idx];
+      if (slide.fields[from]) slide.fields[key] = slide.fields[from];
+      else delete slide.fields[key];
+    });
+  }
+  for (const key of sectionKeys(n)) delete slide.fields[key];
+  if (n - 1 > 1) slide.opts.sections = n - 1;
+  else delete slide.opts.sections;
+  commit({ panel: true });
+  say('Блок убран — вернуть можно кнопкой «Отменить»');
+}
+
 /* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
 function setTone(on) {
   const slide = currentSlide();
@@ -1825,8 +1865,9 @@ function autoGrow(ta) {
 
 function buildField(slide, key, index) {
   const L = layoutOf(slide);
-  const info = FIELD_INFO[key];
-  const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][key]) || info.label;
+  const base = baseKey(key);   // title2 → title
+  const info = FIELD_INFO[base];
+  const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][base]) || info.label;
   const ph = placeholderFor(L, key, { cardNo: cardNo(index) }).replace(/\n/g, ' ');
   const value = slide.fields[key] || '';
   let control;
@@ -1912,6 +1953,21 @@ function buildSlideForm() {
   // тексты
   const fields = h('div', { class: 'section' });
   for (const key of L.fields) fields.append(buildField(slide, key, i));
+  // доп. блоки «заголовок + текст» (карточка интервью)
+  if (L.sections > 1) {
+    const n = sectionCount(slide, L);
+    for (let k = 2; k <= n; k++) {
+      const remove = h('button', { type: 'button', class: 'icon-btn sm', icon: 'x',
+        title: 'Убрать блок', 'aria-label': `Убрать блок ${k}` });
+      remove.addEventListener('click', () => removeSection(k));
+      fields.append(h('div', { class: 'subblock' },
+        h('div', { class: 'subblock-head' }, h('span', { text: `Блок ${k}` }), remove),
+        ...sectionKeys(k).map(key => buildField(slide, key, i))));
+    }
+    if (n < L.sections) {
+      fields.append(btn('btn btn-outline btn-sm add-section', 'plus', 'Ещё заголовок и текст', () => addSection()));
+    }
+  }
   root.append(fields);
 
   // фото
@@ -2193,7 +2249,7 @@ function downloadBlob(blob, name) {
 
 function slideHasContent(slide) {
   const L = layoutOf(slide);
-  return L.fields.some(k => (slide.fields[k] || '').trim()) || Boolean(L.photo && slide.photo && media.has(slide.photo.id));
+  return slideFields(slide, L).some(k => (slide.fields[k] || '').trim()) || Boolean(L.photo && slide.photo && media.has(slide.photo.id));
 }
 
 function isVideoSlide(slide) {

@@ -460,11 +460,41 @@ function isHidden(slide, key) {
   return Boolean(slide && slide.opts && slide.opts.hidden && slide.opts.hidden[key]);
 }
 
-/* Подсказка для пустого поля: у макета может быть своя (строка или функция). */
+/* Подсказка для пустого поля: у макета может быть своя (строка или функция).
+   Для доп. блоков (title2, body3…) — ph.titleN / ph.bodyN, иначе как у основного. */
 function placeholderFor(layout, key, env = {}) {
-  const own = layout.ph && layout.ph[key];
+  const base = baseKey(key);
+  const ph = layout.ph || {};
+  const own = ph[key] || (base !== key ? ph[base + 'N'] : null);
   if (typeof own === 'function') return own(env);
-  return own || PLACEHOLDERS[key] || '';
+  return own || PLACEHOLDERS[base] || '';
+}
+
+/* title2 → title: доп. поля берут подпись, кегль и подсказку основного. */
+function baseKey(key) {
+  return String(key).replace(/\d+$/, '');
+}
+
+/*
+ * Доп. блоки «заголовок + текст» (карточка интервью): у макета sections —
+ * сколько блоков можно, на слайде opts.sections — сколько сейчас. Поля
+ * блоков: title/body, затем title2/body2, title3/body3…
+ */
+function sectionCount(slide, layout) {
+  const max = (layout && layout.sections) || 1;
+  const n = Math.round(Number(slide && slide.opts && slide.opts.sections) || 1);
+  return Math.min(Math.max(n, 1), max);
+}
+
+function sectionKeys(k) {
+  return k === 1 ? ['title', 'body'] : ['title' + k, 'body' + k];
+}
+
+/* Все поля слайда в порядке формы: поля макета + доп. блоки. */
+function slideFields(slide, layout) {
+  const keys = layout.fields.slice();
+  for (let k = 2; k <= sectionCount(slide, layout); k++) keys.push(...sectionKeys(k));
+  return keys;
 }
 
 const PLACEHOLDERS = {
@@ -585,19 +615,29 @@ function arrowOn(slide, L) {
 }
 
 /* Интервью — карточка: белый фон с сеткой, заголовок и текст сверху,
-   логотип внизу справа. */
+   логотип внизу справа. Можно добавить ещё блоки «заголовок + текст»
+   (sectionCount) — они идут ниже с зазором SECTION_GAP. */
+const SECTION_GAP = 130;
+
 function renderInterviewCard(ctx, slide, env, L) {
   const { W, H } = L;
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, LOGO_BOX_BOTTOM, BLACK);
-  const title = fieldBlock(ctx, slide, env, L, 'title', T.card150, 'title', COL_W);
-  const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', COL_W);
-  const items = [{ block: title }, { block: body, gapAbove: 80 }];
+  const items = [];
+  for (let k = 1; k <= sectionCount(slide, L); k++) {
+    const [tk, bk] = sectionKeys(k);
+    const title = fieldBlock(ctx, slide, env, L, tk, T.card150, 'title', COL_W);
+    const body = fieldBlock(ctx, slide, env, L, bk, T.body45, 'body', COL_W);
+    // зазор между блоками — у первого непустого поля блока (stackDown
+    // пропускает пустые, а зазор пустого блока не должен теряться)
+    const gap = k > 1 ? SECTION_GAP : 0;
+    const titleOn = title.lines.length > 0;
+    items.push({ block: title, gapAbove: gap }, { block: body, gapAbove: titleOn ? 80 : gap });
+  }
   const bottom = stackDown(items, 150);
-  drawBlock(ctx, title, MARGIN, items[0].top, BLACK, 'left', alphaOf(title));
-  drawBlock(ctx, body, MARGIN, items[1].top, BLACK, 'left', alphaOf(body));
-  return { overflow: (real(title) || real(body)) && bottom > 1480, photo: null };
+  for (const it of items) drawBlock(ctx, it.block, MARGIN, it.top, BLACK, 'left', alphaOf(it.block));
+  return { overflow: items.some(it => real(it.block)) && bottom > 1480, photo: null };
 }
 
 /* Любимые места — карточка: стопка фотографий, текст по центру, стрелка. */
@@ -856,7 +896,8 @@ function renderReels(ctx, slide, env, L) {
 /*
  * Все макеты. fields — какие поля есть у слайда (порядок = порядок в форме),
  * photo — есть ли место под фото, shade — есть ли «тень» (затемнение),
- * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить).
+ * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить),
+ * sections — сколько блоков «заголовок + текст» можно добавить (см. sectionCount).
  */
 const POST = [1440, 1800];
 
@@ -876,9 +917,10 @@ const LAYOUTS = {
   },
   'int-card': {
     name: 'Интервью — карточка', short: 'Вопрос-ответ', size: POST,
-    fields: ['title', 'body'], photo: false,
+    fields: ['title', 'body'], photo: false, sections: 4,
     ph: { title: env => String(env.cardNo || 1).padStart(2, '0') + '. Заголовок',
-          body: 'Текст ответа. Пустая строка — новый абзац.' },
+          body: 'Текст ответа. Пустая строка — новый абзац.',
+          titleN: 'Ещё заголовок', bodyN: 'Текст' },
     render: renderInterviewCard,
   },
   'fav-cover': {

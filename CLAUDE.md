@@ -86,6 +86,15 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   ghost) while the typed value is kept. Layouts must stack such blocks so
   the following ones move up (e.g. `renderEventCard` gives the first visible
   info line the 89 gap).
+- **Extra sections** (`sections: 4` on `int-card`): `slide.opts.sections`
+  (default 1, clamped by `sectionCount()`) adds «title + body» blocks with
+  keys `title2/body2`, `title3/body3`… (`sectionKeys(k)`). `slideFields()`
+  = layout fields + those keys (use it, not `L.fields`, when checking a
+  slide's text); `baseKey()` maps `title2` → `title` for labels, size group
+  and placeholders (`ph.titleN`/`ph.bodyN`). `renderInterviewCard` stacks
+  the blocks with `SECTION_GAP` between them. In the form each extra block
+  has a remove button (later blocks shift up) and «Ещё заголовок и текст»
+  adds one and focuses its title (synchronously, so iOS opens the keyboard).
 - Empty fields render as **ghost placeholders** (alpha `GHOST_ALPHA`) when
   `env.ghost` is true (stage, thumbnails); export passes `ghost: false`.
   Overflow checks (`real()`) ignore ghosts.
@@ -116,7 +125,7 @@ against the Figma screenshots and matches (line breaks differ only where
 ### `src/app.js` — UI and state
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
-  slide: `{id, layout, fields{}, opts{arrow, shade, tone, hidden{}}, size{title, body},
+  slide: `{id, layout, fields{}, opts{arrow, shade, tone, hidden{}, sections}, size{title, body},
   photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
