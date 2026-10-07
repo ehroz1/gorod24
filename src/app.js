@@ -64,12 +64,12 @@ const RUBRIC_BY_ID = Object.fromEntries(RUBRICS.map(r => [r.id, r]));
 
 /* Поля формы. group: какой ползунок кегля их масштабирует. */
 const FIELD_INFO = {
-  title: { label: 'Заголовок', multiline: true, group: 'title', hint: 'Enter — перенос строки' },
+  title: { label: 'Заголовок', multiline: true, group: 'title', rich: 'color', hint: 'Enter — перенос строки' },
   subtitle: { label: 'Подзаголовок', multiline: true, group: 'body', rich: true },
   body: { label: 'Текст', multiline: true, big: true, group: 'body', rich: true, hint: 'Пустая строка — новый абзац' },
   address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам', optional: true },
   number: { label: 'Число', group: 'title', inputmode: 'numeric' },
-  label: { label: 'Подпись к числу', multiline: true, group: 'title' },
+  label: { label: 'Подпись к числу', multiline: true, group: 'title', rich: 'color' },
   dates: { label: 'Даты', group: 'body' },
   date: { label: 'Дата и время', group: 'body', hint: '🗓️ добавится сам', optional: true },
   place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
@@ -100,6 +100,7 @@ const state = {
   overflow: [],          // по индексу слайда — текст не помещается
   lastRender: null,      // результат отрисовки текущего слайда на превью
   quick: null,           // телефон: правим это поле с превью (быстрая правка), иначе null
+  glyphs: {},            // поле → буквы, которых нет в его шрифте (glyphIssues)
   exportFormat: 'png',
   exportWidth: 1440,
   undo: [],
@@ -1607,6 +1608,8 @@ function renderStage() {
   state.overflow[state.current] = Boolean(res.overflow);
   renderOverlay();
   renderTextMarks();
+  state.glyphs = glyphIssues(slide, res.texts);
+  syncGlyphWarnings();
   renderWarnings();
   const n = state.project.slides.length;
   el.slideCounter.textContent = `${state.current + 1} / ${n}`;
@@ -1690,6 +1693,11 @@ function renderWarnings() {
   }
   const up = photoUpscale(slide);
   if (up > UPSCALE_WARN) items.push(h('span', { class: 'warn' }, iconSpan('warning'), wide ? 'Фото мелковато — будет мыльным' : 'Фото мелковато'));
+  const glyphKeys = Object.keys(state.glyphs || {});
+  if (glyphKeys.length) {
+    const chars = [...new Set(glyphKeys.flatMap(k => state.glyphs[k].chars))].join(' ');
+    items.push(h('span', { class: 'warn' }, iconSpan('warning'), wide ? `Нет в шрифте: ${chars}` : `Нет букв: ${chars}`));
+  }
   const vm = slideMedia(slide);
   if (isVideoMedia(vm) && clipOf(slide, vm).length > videoLimit(slide) + 0.05) {
     items.push(h('span', { class: 'warn' }, iconSpan('warning'), `Видео длиннее ${videoLimit(slide)} с`));
@@ -1820,6 +1828,45 @@ function syncSlideSelection(scroll) {
     const on = Number(item.dataset.index) === state.current;
     item.classList.toggle('current', on);
     if (on && scroll) item.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+}
+
+/* ------------------------------------------- буквы, которых нет в шрифте */
+
+/*
+ * В BravoRG нет таджикской «ҷ», в Nauryz — «ӣ ӯ ҳ ҷ» и др. (FONT_MISSING
+ * считает build.py по самим шрифтам). Такие буквы рисуются Inter (см.
+ * FONT_FAMILY) и выбиваются из заголовка — предупреждаем под полем и в
+ * плашке под превью. Шрифт, загруженный вручную, не проверяем.
+ */
+const FONT_NAMES = { title: 'BravoRG', display: 'Nauryz Red Keds', body: 'Inter' };
+
+function glyphIssues(slide, texts) {
+  const out = {};
+  if (typeof FONT_MISSING === 'undefined' || !texts) return out;
+  for (const t of texts) {
+    if (t.ghost || state.userFonts[t.font]) continue;
+    const missing = FONT_MISSING[t.font] || '';
+    const text = (slide.fields && slide.fields[t.key]) || '';
+    const chars = [...new Set([...text].filter(ch => missing.includes(ch)))];
+    if (chars.length) out[t.key] = { chars, font: t.font };
+  }
+  return out;
+}
+
+/* Подсказка под полем — без пересборки формы (её не трогаем, пока печатают). */
+function syncGlyphWarnings() {
+  const issues = state.glyphs || {};
+  el.panelBody.querySelectorAll('[data-field]').forEach(node => {
+    const field = node.closest('.field');
+    if (!field) return;
+    const issue = issues[node.dataset.field];
+    let note = field.querySelector(':scope > .glyph-warn');
+    if (!issue) { if (note) note.hidden = true; return; }
+    if (!note) { note = h('span', { class: 'field-hint glyph-warn' }); field.append(note); }
+    note.hidden = false;
+    const text = `В шрифте ${FONT_NAMES[issue.font] || issue.font} нет ${issue.chars.length > 1 ? 'букв' : 'буквы'} ${issue.chars.join(' ')} — на слайде ${issue.chars.length > 1 ? 'они будут' : 'она будет'} шрифтом Inter`;
+    if (note.textContent !== text) note.textContent = text;
   });
 }
 
@@ -2167,7 +2214,10 @@ function buildField(slide, key, index) {
   const info = FIELD_INFO[base];
   const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][base]) || info.label;
   const ph = placeholderFor(L, key, { cardNo: cardNo(index) }).replace(/\n/g, ' ');
-  if (info.rich && !(L.plain || []).includes(base)) return buildRichField(slide, key, label, ph, info);
+  // full — жирный, курсив, цвет, маркер (поля Inter); color — только цвет и
+  // маркер (заголовки: у BravoRG и Nauryz нет жирного и курсива)
+  const mode = info.rich === true && !(L.plain || []).includes(base) ? 'full' : info.rich ? 'color' : null;
+  if (mode) return buildRichField(slide, key, label, ph, info, mode);
   const value = slide.fields[key] || '';
   let control;
   if (info.multiline) {
@@ -2244,7 +2294,14 @@ function richToHtml(text, runs, explicit = false) {
     if (explicit) {
       html += `<span style="font-weight:${f & BOLD ? 700 : 400};font-style:${f & ITALIC ? 'italic' : 'normal'}">${piece}</span>`;
     } else {
-      html += (f & BOLD ? '<b>' : '') + (f & ITALIC ? '<i>' : '') + piece + (f & ITALIC ? '</i>' : '') + (f & BOLD ? '</b>' : '');
+      // цвет и маркер в поле — «экранными» цветами (UI_*): кремовый на белом
+      // поле не прочитать; на слайде они станут фирменными (см. render.js)
+      const open = (f & MARK ? `<span style="background-color:${UI_MARK}">` : '') +
+        (f & RED ? `<span style="color:${UI_RED}">` : f & CREAM ? `<span style="color:${UI_CREAM}">` : '') +
+        (f & BOLD ? '<b>' : '') + (f & ITALIC ? '<i>' : '');
+      const close = (f & ITALIC ? '</i>' : '') + (f & BOLD ? '</b>' : '') +
+        (f & (RED | CREAM) ? '</span>' : '') + (f & MARK ? '</span>' : '');
+      html += open + piece + close;
     }
   }
   // пустая последняя строка видна в поле только с лишним <br>
@@ -2261,7 +2318,14 @@ function readRich(root) {
   const flagsOf = node => {
     const cs = getComputedStyle(node);
     const w = parseInt(cs.fontWeight, 10) || (cs.fontWeight === 'bold' ? 700 : 400);
-    return (w >= 600 ? BOLD : 0) | (/italic|oblique/.test(cs.fontStyle) ? ITALIC : 0);
+    let f = (w >= 600 ? BOLD : 0) | (/italic|oblique/.test(cs.fontStyle) ? ITALIC : 0);
+    if (sameColor(cs.color, UI_RED)) f |= RED;
+    else if (sameColor(cs.color, UI_CREAM)) f |= CREAM;
+    // фон не наследуется — ищем плашку маркера у предков до самого поля
+    for (let n = node; n && n !== root; n = n.parentElement) {
+      if (sameColor(getComputedStyle(n).backgroundColor, UI_MARK)) { f |= MARK; break; }
+    }
+    return f;
   };
   const walk = node => {
     for (const child of node.childNodes) {
@@ -2372,25 +2436,28 @@ function htmlToRich(html) {
   return { text: outC.join(''), runs: flagsToRuns(outF.map((f, i) => (outC[i] === '\n' ? 0 : f))) };
 }
 
-function buildRichField(slide, key, label, ph, info) {
-  const runs = fieldRuns(slide, key, slide.fields[key] || '');
+function buildRichField(slide, key, label, ph, info, mode = 'full') {
   const value = slide.fields[key] || '';
+  let runs = fieldRuns(slide, key, value);
+  if (runs && mode === 'color') runs = stripStyle(runs);
   const editor = h('div', { class: 'textarea rich' + (info.big ? ' big' : ''), contenteditable: 'true',
     role: 'textbox', 'aria-multiline': 'true', 'aria-label': label, 'data-placeholder': ph,
     spellcheck: 'true', autocapitalize: 'sentences', enterkeyhint: 'enter' });
   editor.dataset.field = key;
+  editor.dataset.mode = mode;
   editor.innerHTML = richToHtml(value, runs);
   const syncEmpty = () => editor.classList.toggle('is-empty', !editor.textContent);
   syncEmpty();
   const save = () => {
     const r = readRich(editor);
     syncEmpty();
-    setRichField(key, r.text, r.runs);
+    setRichField(key, r.text, mode === 'color' ? stripStyle(r.runs) : r.runs);
   };
   editor.addEventListener('input', save);
   editor.addEventListener('keydown', e => {
-    // подчёркивания на слайде нет — ⌘U не даём
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u') e.preventDefault();
+    const k = e.key.toLowerCase();
+    // подчёркивания на слайде нет — ⌘U не даём; у заголовков нет и ⌘B / ⌘I
+    if ((e.metaKey || e.ctrlKey) && (k === 'u' || (mode === 'color' && (k === 'b' || k === 'i')))) e.preventDefault();
   });
   editor.addEventListener('paste', e => {
     const cd = e.clipboardData;
@@ -2409,19 +2476,43 @@ function buildRichField(slide, key, label, ph, info) {
   });
 
   const tools = h('span', { class: 'fmt-tools', role: 'toolbar', 'aria-label': 'Начертание' },
-    fmtButton(editor, 'bold', 'Ж', 'Жирный (⌘B)'),
-    fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)'),
-    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать жирный и курсив'));
+    mode === 'full' ? fmtButton(editor, 'bold', 'Ж', 'Жирный (⌘B)') : null,
+    mode === 'full' ? fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)') : null,
+    fmtButton(editor, 'red', null, 'Красный'),
+    fmtButton(editor, 'cream', null, 'Кремовый'),
+    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'),
+    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать выделение'));
+  const tip = mode === 'full' ? 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' : 'Выделите слова и выберите цвет или маркер.';
   return h('div', { class: 'field rich-field' },
     h('span', { class: 'field-label' }, h('span', { text: label }), tools),
     editor,
-    info.hint ? h('span', { class: 'field-hint', text: info.hint + '. Выделите слова и нажмите «Ж» или «К».' }) : null);
+    h('span', { class: 'field-hint', text: (info.hint ? info.hint + '. ' : '') + tip }));
+}
+
+/* Экранные цвета выделения в поле (на слайде — ACCENT_RED / BRAND_CREAM). */
+const UI_RED = '#d1343a', UI_CREAM = '#c79a16', UI_MARK = '#fef3bd';
+
+function rgbOf(color) {
+  const m = String(color || '').match(/^#([0-9a-f]{6})$/i);
+  if (m) return [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)).join(',');
+  const r = String(color || '').match(/rgba?\(([^)]+)\)/);
+  if (!r) return '';
+  const parts = r[1].split(',').map(v => parseFloat(v));
+  if (parts.length > 3 && parts[3] === 0) return '';   // прозрачный
+  return parts.slice(0, 3).map(Math.round).join(',');
+}
+function sameColor(a, b) { const x = rgbOf(a); return Boolean(x) && x === rgbOf(b); }
+
+/* Без жирного и курсива (поля заголовков). */
+function stripStyle(runs) {
+  return flagsToRuns(runs.flatMap(([len, f]) => Array(len).fill(f & ~(BOLD | ITALIC))));
 }
 
 /* Кнопка начертания: фокус и выделение остаются в поле. */
 function fmtButton(editor, cmd, text, title) {
   const b = h('button', { type: 'button', class: 'fmt-btn fmt-' + cmd, text, title, 'aria-label': title,
     'data-cmd': cmd, 'aria-pressed': cmd === 'plain' ? null : 'false' });
+  if (cmd === 'red' || cmd === 'cream') b.append(h('span', { class: 'fmt-dot', 'aria-hidden': 'true' }));
   const keep = e => e.preventDefault();
   b.addEventListener('mousedown', keep);
   b.addEventListener('pointerdown', keep);
@@ -2443,11 +2534,29 @@ function applyFormat(editor, cmd, fromPopup = false) {
     }
   }
   lastUndoKey = null;   // смена начертания — отдельный шаг отмены
-  try { document.execCommand('styleWithCSS', false, false); } catch { /* не везде есть */ }
+  const css = on => { try { document.execCommand('styleWithCSS', false, on); } catch { /* не везде есть */ } };
+  const fore = () => document.queryCommandValue('foreColor');
+  const back = () => document.queryCommandValue('hiliteColor') || document.queryCommandValue('backColor');
+  const base = getComputedStyle(editor).color;
+  css(false);
   if (cmd === 'plain') {
     document.execCommand('removeFormat');
     if (document.queryCommandState('bold')) document.execCommand('bold');
     if (document.queryCommandState('italic')) document.execCommand('italic');
+    css(true);
+    if (sameColor(fore(), UI_RED) || sameColor(fore(), UI_CREAM)) document.execCommand('foreColor', false, base);
+    if (sameColor(back(), UI_MARK)) document.execCommand('hiliteColor', false, 'transparent');
+    css(false);
+  } else if (cmd === 'red' || cmd === 'cream') {
+    // второе нажатие на тот же цвет — снимает его
+    const want = cmd === 'red' ? UI_RED : UI_CREAM;
+    css(true);
+    document.execCommand('foreColor', false, sameColor(fore(), want) ? base : want);
+    css(false);
+  } else if (cmd === 'marker') {
+    css(true);
+    document.execCommand('hiliteColor', false, sameColor(back(), UI_MARK) ? 'transparent' : UI_MARK);
+    css(false);
   } else {
     document.execCommand(cmd);
   }
@@ -2469,12 +2578,18 @@ function syncFmtButtons() {
   syncFmtStates(ed);
 }
 
-/* «Ж» / «К» горят, если у курсора / выделения такое начертание. */
+/* «Ж», «К», цвет, маркер горят, если у курсора / выделения они есть. */
 function syncFmtStates(ed) {
   const wrap = ed.closest('.rich-field');
-  for (const cmd of ['bold', 'italic']) {
+  const val = c => { try { return document.queryCommandValue(c); } catch { return ''; } };
+  for (const cmd of ['bold', 'italic', 'red', 'cream', 'marker']) {
     let on = false;
-    try { on = document.queryCommandState(cmd); } catch { /* нет */ }
+    try {
+      if (cmd === 'red') on = sameColor(val('foreColor'), UI_RED);
+      else if (cmd === 'cream') on = sameColor(val('foreColor'), UI_CREAM);
+      else if (cmd === 'marker') on = sameColor(val('hiliteColor') || val('backColor'), UI_MARK);
+      else on = document.queryCommandState(cmd);
+    } catch { /* нет */ }
     for (const b of [wrap && wrap.querySelector('.fmt-' + cmd), fmtPopup && fmtPopup.querySelector('.fmt-' + cmd)]) {
       if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
     }
@@ -2498,9 +2613,11 @@ const POPUP_ABOVE = 64;   // над выделением: место под си
 
 function buildFmtPopup() {
   fmtPopup = h('div', { class: 'fmt-pop', role: 'toolbar', 'aria-label': 'Начертание', hidden: true });
-  for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['plain', 'Обычный', 'Обычный — убрать жирный и курсив']]) {
+  for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['red', null, 'Красный'],
+    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер'], ['plain', 'Обычный', 'Обычный — убрать выделение']]) {
     const b = h('button', { type: 'button', class: 'fmt-pop-btn fmt-' + cmd, text, title, 'aria-label': title,
       'aria-pressed': cmd === 'plain' ? null : 'false' });
+    if (cmd === 'red' || cmd === 'cream') b.append(h('span', { class: 'fmt-dot', 'aria-hidden': 'true' }));
     b.addEventListener('pointerdown', e => {
       e.preventDefault();
       if (fmtPopupEditor) applyFormat(fmtPopupEditor, cmd, true);
@@ -2533,6 +2650,9 @@ function placeFmtPopup() {
   if (!box.width && !box.height) { hideFmtPopup(); return; }
   if (!fmtPopup) buildFmtPopup();
   fmtPopupEditor = ed;
+  // у заголовков нет «Ж» и «К»
+  const colorOnly = ed.dataset.mode === 'color';
+  fmtPopup.querySelectorAll('.fmt-bold, .fmt-italic').forEach(b => { b.hidden = colorOnly; });
   fmtPopup.hidden = false;
   syncFmtStates(ed);
   const pw = fmtPopup.offsetWidth, ph = fmtPopup.offsetHeight;

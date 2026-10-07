@@ -432,6 +432,8 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .field-label { font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
 .field-label .muted { font-weight: 500; }
 .field-hint { color: var(--muted); font-size: 12.5px; }
+.glyph-warn { color: var(--amber-text) !important; font-weight: 600; display: block !important; }
+.glyph-warn[hidden] { display: none !important; }
 .field-tools { display: inline-flex; align-items: center; gap: 10px; font-weight: 500; }
 .field.off .input, .field.off .textarea { opacity: .45; }
 .field.off .field-label > span:first-child { color: var(--muted); text-decoration: line-through; }
@@ -483,6 +485,18 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .fmt-btn.fmt-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; }
 .fmt-btn.fmt-plain { font-size: 12.5px; color: var(--muted); }
 .fmt-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
+/* цвет и маркер: кружок цвета, «А» на кремовой плашке */
+.fmt-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); }
+.fmt-red .fmt-dot { background: #700004; }
+.fmt-cream .fmt-dot { background: #FEF3BD; }
+.fmt-marker { font-weight: 800; }
+.fmt-btn.fmt-marker, .fmt-pop-btn.fmt-marker { background-image: linear-gradient(transparent 22%, #FEF3BD 22%, #FEF3BD 82%, transparent 82%); background-size: 60% 100%; background-repeat: no-repeat; background-position: center; color: #000; }
+.fmt-btn.fmt-marker.on, .fmt-pop-btn.fmt-marker.on { outline: 2px solid var(--blue); outline-offset: -2px; }
+.fmt-red.on .fmt-dot, .fmt-cream.on .fmt-dot { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--blue); }
+.fmt-pop-btn[hidden] { display: none; }
+/* маркер в поле: текст на кремовой плашке — тёмный и в тёмной теме */
+.rich span[style*="background-color"] { color: #111 !important; border-radius: 3px; }
+.field-label { flex-wrap: wrap; row-gap: 4px; }
 
 /* всплывающая панель «Ж · К · Обычный» у выделенного текста (телефон) */
 .fmt-pop {
@@ -493,12 +507,17 @@ span[data-icon] svg { width: 100%; height: 100%; }
 }
 .fmt-pop[hidden] { display: none; }
 .fmt-pop-btn {
-  min-width: 48px; height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
+  min-width: 38px; height: 44px; padding: 0 8px; border: 0; border-radius: 10px;
   background: transparent; color: inherit; font-size: 17px; font-weight: 500; line-height: 1;
 }
 .fmt-pop-btn.fmt-bold { font-weight: 800; }
 .fmt-pop-btn.fmt-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; font-size: 19px; }
 .fmt-pop-btn.fmt-plain { font-size: 15px; }
+@media (max-width: 360px) {
+  .fmt-pop { gap: 0; padding: 3px; }
+  .fmt-pop-btn { min-width: 34px; padding: 0 6px; font-size: 16px; }
+  .fmt-pop-btn.fmt-plain { font-size: 13.5px; }
+}
 .fmt-pop-btn.on { background: var(--surface); color: var(--text); }
 /* у поля с форматированием снизу запас — чтобы под выделением поместилась панель */
 @media (hover: none) { .rich-field { scroll-margin-bottom: 84px; } }

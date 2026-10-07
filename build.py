@@ -12,6 +12,7 @@
 """
 
 import base64
+import hashlib
 import json
 import mimetypes
 import subprocess
@@ -28,7 +29,7 @@ OUT = HERE / "index.html"
 # какие символы оставляем в шрифтах: латиница, вся кириллица (с казахскими,
 # таджикскими, узбекскими буквами), пунктуация, знаки валют
 SUBSET_UNICODES = (
-    "U+0020-007E,U+00A0-00FF,U+0400-04FF,U+2010-2027,U+2030-203A,"
+    "U+0020-007E,U+00A0-00FF,U+02BB-02BC,U+0400-04FF,U+2010-2027,U+2030-203A,"
     "U+2116,U+2122,U+20B8,U+20BD,U+2212,U+2190-2193"
 )
 
@@ -97,6 +98,26 @@ def font_face(family: str, path: Path, italic: bool = False, weight: int = 400) 
     )
 
 
+# Буквы, которые проверяем в шрифтах: вся кириллица (казахские, таджикские,
+# узбекские буквы — там же) и узбекские латинские апострофы oʻ gʻ.
+WATCH_CHARS = [chr(c) for c in range(0x0400, 0x0500)] + ["\u02bb", "\u02bc", "\u2018", "\u2019"]
+
+
+def missing_chars(path: Path | None) -> str:
+    """Каких букв из WATCH_CHARS нет в шрифте — для предупреждения в приложении."""
+    if not path:
+        return ""
+    try:
+        from fontTools.ttLib import TTFont
+        cmap = TTFont(str(path), fontNumber=0).getBestCmap() or {}
+    except Exception:
+        return ""
+    # только буквы, у которых есть пара в другом регистре или которые реально
+    # встречаются в текстах (служебные символы 0x0482–0x0489 не в счёт)
+    return "".join(ch for ch in WATCH_CHARS
+                   if ord(ch) not in cmap and not 0x0482 <= ord(ch) <= 0x0489)
+
+
 def collect_icons() -> str:
     """Собирает иконки из brand/icons/ в объект ICONS для интерфейса."""
     icons = {}
@@ -130,12 +151,14 @@ def main() -> int:
     fb_title = find_one(FONTS, ["fallback_title"], FONT_EXT)
     fb_display = find_one(FONTS, ["fallback_display"], FONT_EXT)
 
+    font_missing = {}
     for key, family, real, fallback, label in (
         ("title", "G24Title", title, fb_title, "BravoRG"),
         ("display", "G24Display", display, fb_display, "Nauryz Red Keds"),
     ):
         src = real or fallback
         bundled[key] = bool(real)
+        font_missing[key] = missing_chars(src)
         if src:
             faces.append(font_face(family, src))
         mark = src.name if real else (f"— нет файла, запасной {fallback.name}" if fallback else "— нет файла")
@@ -145,6 +168,7 @@ def main() -> int:
         print("не нашёл brand/fonts/body.ttf (Inter) — без него текст карточек не собрать")
         return 1
     faces.append(font_face("G24Body", body))
+    font_missing["body"] = missing_chars(body)
     print(f"шрифт Inter            {body.name}")
     if body_italic:
         faces.append(font_face("G24Body", body_italic, italic=True))
@@ -167,9 +191,16 @@ def main() -> int:
         brand[key] = data_url(found) if found else None
         print(f"{key:9s}: {found.name if found else '— нет файла'}")
 
+    for key, chars in font_missing.items():
+        sample = "".join(c for c in chars if c.islower())[:24]
+        if sample:
+            print(f"  в шрифте {key}: нет {sample}…")
     bundled_js = (
         "const BUNDLED_BRAND = " + json.dumps(brand) + ";\n"
         "const BUNDLED_FONTS = " + json.dumps(bundled) + ";\n"
+        # каких букв нет в шрифтах — приложение предупреждает под полем
+        "const FONT_MISSING = " + json.dumps(font_missing, ensure_ascii=False) + ";\n"
+        "const BUILD_ID = '__BUILD_ID__';\n"
     )
 
     # ---------- иконка приложения (favicon — svg, для iOS — готовый png)
@@ -199,8 +230,13 @@ def main() -> int:
             print(f"ошибка сборки: не подставлено {token}")
             return 1
 
+    # номер сборки = хеш страницы: приложение сверяет его с version.json
+    # и в окне экспорта предлагает обновиться, если сайт уже новее
+    build_id = hashlib.sha1(html.encode("utf-8")).hexdigest()[:12]
+    html = html.replace("__BUILD_ID__", build_id)
     OUT.write_text(html, encoding="utf-8")
-    print(f"\nготово: {OUT.name}  ({OUT.stat().st_size / 1024:.0f} КБ)")
+    (HERE / "version.json").write_text(json.dumps({"build": build_id}) + "\n", encoding="utf-8")
+    print(f"\nготово: {OUT.name}  ({OUT.stat().st_size / 1024:.0f} КБ), сборка {build_id}")
 
     # ---------- PWA: манифест и сервис-воркер рядом с index.html
     manifest = (SRC / "manifest.template.json").read_text(encoding="utf-8")
@@ -209,7 +245,7 @@ def main() -> int:
     (HERE / "manifest.webmanifest").write_text(manifest, encoding="utf-8")
     (HERE / "service-worker.js").write_text(
         (SRC / "service-worker.js").read_text(encoding="utf-8"), encoding="utf-8")
-    print("готово: manifest.webmanifest, service-worker.js")
+    print("готово: manifest.webmanifest, service-worker.js, version.json")
 
     missing = [name for key, name in (("title", "BravoRG"), ("display", "Nauryz Red Keds"))
                if not bundled[key]]

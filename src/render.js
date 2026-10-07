@@ -19,10 +19,12 @@
 /* ------------------------------------------------------------- шрифты */
 
 // Пользовательский шрифт (загружен в «Настройках») идёт первым, за ним
-// вшитый при сборке. Если ни один не загрузился — системный sans-serif.
+// вшитый при сборке. Букв, которых в нём нет (таджикские ҷ ӣ ӯ ҳ и т. п.,
+// см. FONT_MISSING), берутся из Inter — одинаково на любом телефоне, а не
+// системным шрифтом. Если ничего не загрузилось — системный sans-serif.
 const FONT_FAMILY = {
-  title: "'G24TitleUser', 'G24Title', sans-serif",      // BravoRG
-  display: "'G24DisplayUser', 'G24Display', sans-serif", // Nauryz Red Keds
+  title: "'G24TitleUser', 'G24Title', 'G24Body', sans-serif",      // BravoRG
+  display: "'G24DisplayUser', 'G24Display', 'G24Body', sans-serif", // Nauryz Red Keds
   body: "'G24Body', sans-serif",                        // Inter
 };
 
@@ -130,12 +132,15 @@ function fillTracked(ctx, text, x, y, track) {
 }
 
 /*
- * Жирный и курсив внутри текста (кнопки «Ж» / «К» в форме, вставка с
- * форматированием). Хранятся рядом с текстом: slide.fmt[key] — отрезки
- * [длина, флаги] подряд, сумма длин = длина текста; флаги: 1 — жирный,
- * 2 — курсив. Не сходится с текстом (правили в старой версии) — игнорируем.
+ * Жирный, курсив, цвет слов и маркер внутри текста (кнопки в форме, вставка
+ * с форматированием). Хранятся рядом с текстом: slide.fmt[key] — отрезки
+ * [длина, флаги] подряд, сумма длин = длина текста. Флаги: 1 — жирный,
+ * 2 — курсив, 4 — красный, 8 — кремовый, 16 — маркер (кремовая плашка за
+ * словами, текст на ней чёрный). Не сходится с текстом — игнорируем.
  */
-const BOLD = 1, ITALIC = 2;
+const BOLD = 1, ITALIC = 2, RED = 4, CREAM = 8, MARK = 16;
+const STYLE_BITS = BOLD | ITALIC;       // нужны начертания шрифта (есть только у Inter)
+const ACCENT_RED = '#700004';           // фирменный красный (название события в макете)
 
 function fieldRuns(slide, key, text) {
   const runs = slide && slide.fmt && slide.fmt[key];
@@ -151,7 +156,7 @@ function fieldRuns(slide, key, text) {
 function expandRuns(runs, length) {
   const flags = new Uint8Array(length);
   let i = 0;
-  for (const [len, f] of runs) { flags.fill(f & 3, i, Math.min(length, i + len)); i += len; }
+  for (const [len, f] of runs) { flags.fill(f & 31, i, Math.min(length, i + len)); i += len; }
   return flags;
 }
 
@@ -168,7 +173,7 @@ function measureSlice(m, text, flags, a = 0, b = text.length) {
   for (let i = a; i < b;) {
     let j = i + 1;
     while (j < b && flags[j] === flags[i]) j++;
-    m.ctx.font = m.fonts[flags[i]];
+    m.ctx.font = m.fonts[flags[i] & STYLE_BITS];
     w += measureTracked(m.ctx, text.slice(i, j), m.track, m.stretch);
     i = j;
   }
@@ -300,7 +305,7 @@ function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1, boxW = b
         const spaces = line.text.split(' ').length - 1;
         if (spaces) gap = Math.max(0, (boxW - line.width) / spaces);
       }
-      if (line.flags || gap) drawRichLine(ctx, b, line, lx, base, gap);
+      if (line.flags || gap) drawRichLine(ctx, b, line, lx, base, gap, color);
       else drawPiece(ctx, b, line.text, lx, base);
     }
     base += b.lead;
@@ -322,9 +327,9 @@ function drawPiece(ctx, b, text, x, base) {
 
 /*
  * Где на слайде лежит текст каждого поля — для правки прямо на превью
- * (нажали на текст → редактируем это поле). renderSlide собирает их в
- * res.texts: { key, x, y, w, h } в единицах макета, по видимым строкам
- * (с запасом на выносные элементы), по порядку отрисовки.
+ * (нажали на текст → редактируем это поле) и проверок (буквы, контраст).
+ * renderSlide собирает их в res.texts: { key, x, y, w, h, font, ghost } в
+ * единицах макета, по видимым строкам (с запасом на выносные элементы).
  */
 let textHits = null;
 
@@ -341,13 +346,17 @@ function recordTextHit(b, x, capTop, align, boxW) {
   }
   const top = capTop - b.size * 0.12;
   const bottom = capTop + b.height + b.size * 0.24;
-  textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top });
+  textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top,
+    font: b.st.font, ghost: Boolean(b.ghost) });
 }
 
-/* Строка по кускам: смена начертания и (при выравнивании по ширине) пробелы. */
-function drawRichLine(ctx, b, line, x, base, gap) {
+/* Строка по кускам: смена начертания / цвета, маркер и (при выравнивании
+   по ширине) пробелы. Сначала раскладываем куски, потом рисуем плашки
+   маркера (слитно через пробелы между выделенными словами), потом текст. */
+function drawRichLine(ctx, b, line, x, base, gap, color) {
   const { text, flags } = line;
   const m = { ctx, fonts: b.fonts, track: b.track, stretch: b.stretch };
+  const pieces = [];
   let cx = x;
   for (let i = 0; i < text.length;) {
     const f = flags ? flags[i] : 0;
@@ -356,13 +365,38 @@ function drawRichLine(ctx, b, line, x, base, gap) {
       while (j < text.length && (flags ? flags[j] : 0) === f && !(gap && text[j] === ' ')) j++;
     }
     const piece = text.slice(i, j);
-    ctx.font = b.fonts[f];
-    const w = measureSlice(m, piece, null);
-    if (gap && piece === ' ') cx += w + gap;
-    else { drawPiece(ctx, b, piece, cx, base); cx += w; }
+    ctx.font = b.fonts[f & STYLE_BITS];
+    const w = measureSlice(m, piece, null) + (gap && piece === ' ' ? gap : 0);
+    pieces.push({ text: piece, f, x: cx, w });
+    cx += w;
     i = j;
   }
+  // плашки маркера: от верха прописных с запасом до низа выносных
+  const padX = b.size * 0.14, padTop = b.size * 0.2, padBottom = b.size * 0.26;
+  ctx.save();
+  ctx.fillStyle = b.markerColor || BRAND_CREAM;
+  for (let k = 0; k < pieces.length; k++) {
+    if (!(pieces[k].f & MARK)) continue;
+    let e = k;
+    while (e + 1 < pieces.length && pieces[e + 1].f & MARK) e++;
+    // пробел по краю выделения плашку не продлевает
+    let s0 = k, e0 = e;
+    while (s0 < e0 && pieces[s0].text.trim() === '') s0++;
+    while (e0 > s0 && pieces[e0].text.trim() === '') e0--;
+    const x0 = pieces[s0].x - padX, x1 = pieces[e0].x + pieces[e0].w + padX;
+    roundRect(ctx, x0, base - b.cap - padTop, x1 - x0, b.cap + padTop + padBottom, b.size * 0.12);
+    ctx.fill();
+    k = e;
+  }
+  ctx.restore();
+  for (const p of pieces) {
+    if (p.text.trim() === '') continue;
+    ctx.font = b.fonts[p.f & STYLE_BITS];
+    ctx.fillStyle = p.f & MARK ? BLACK : p.f & RED ? ACCENT_RED : p.f & CREAM ? BRAND_CREAM : color;
+    drawPiece(ctx, b, p.text, p.x, base);
+  }
   ctx.font = b.font;
+  ctx.fillStyle = color;
 }
 
 /*
@@ -751,8 +785,13 @@ function sizeScale(slide, group) {
 function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform) {
   const f = fieldText(slide, env, key, layout);
   let text = f.text;
-  // у полей из layout.plain (шрифт без жирного/курсива) форматирование не рисуем
-  let runs = f.ghost || (layout.plain && layout.plain.includes(baseKey(key))) ? null : fieldRuns(slide, key, text);
+  let runs = f.ghost ? null : fieldRuns(slide, key, text);
+  // жирный и курсив есть только у Inter: у заголовков (BravoRG, Nauryz) и
+  // полей из layout.plain остаются цвет и маркер
+  if (runs && (st.font !== 'body' || (layout.plain && layout.plain.includes(baseKey(key))))) {
+    runs = runs.map(([len, fl]) => [len, fl & ~STYLE_BITS]);
+    if (!runs.some(r => r[1])) runs = null;
+  }
   if (transform && text) {
     const t = transform(text);
     // эмодзи спереди сдвигает форматирование на свою длину
@@ -762,6 +801,8 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
   const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
   b.key = key;
   b.ghost = f.ghost;
+  // маркер кремовый; если слайд уже кремовый (фирменный цвет) — белый
+  b.markerColor = brandTone(slide) ? WHITE : BRAND_CREAM;
   b.alpha = f.ghost ? (typeof env.ghostAlpha === 'number' ? env.ghostAlpha : GHOST_ALPHA) : 1;
   return b;
 }
