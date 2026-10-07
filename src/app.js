@@ -23,6 +23,7 @@ const STORE_DRAFTS = 'g24.drafts.v1';
 const STORE_THEME = 'g24.theme.v1';
 const STORE_PREFS = 'g24.prefs.v1';
 const STORE_INSTALL_DISMISSED = 'g24.installDismissed.v1';
+const STORE_HINT_TAP = 'g24.hintTapText.v1';   // подсказку «нажмите на текст на превью» уже показали
 const MAX_DRAFTS = 60;
 const PHOTO_MAX = 3200;       // длинная сторона хранимого фото (1440×1800 + запас на зум)
 const PREVIEW_MAX = 1400;     // для превью и миниатюр
@@ -87,7 +88,8 @@ const el = {};
 ['home', 'editor', 'draftsSection', 'draftsRow', 'rubricGrid', 'fontNoteHome', 'brandLogo',
  'docName', 'docRubric', 'slidesList', 'stage', 'stageInner', 'stageCanvas', 'stageOverlay',
  'warnings', 'slideCounter', 'panel', 'panelBody', 'btnPrev', 'btnNext', 'btnUndo', 'btnRedo',
- 'sheet', 'sheetTitle', 'sheetBody', 'status', 'filePicker', 'projectPicker', 'brandPicker', 'dropHint']
+ 'sheet', 'sheetTitle', 'sheetBody', 'status', 'filePicker', 'projectPicker', 'brandPicker', 'dropHint',
+ 'textMarks']
   .forEach(id => { el[id] = document.getElementById(id); });
 
 const state = {
@@ -97,6 +99,7 @@ const state = {
   tab: 'slide',
   overflow: [],          // по индексу слайда — текст не помещается
   lastRender: null,      // результат отрисовки текущего слайда на превью
+  quick: null,           // телефон: правим это поле с превью (быстрая правка), иначе null
   exportFormat: 'png',
   exportWidth: 1440,
   undo: [],
@@ -1207,7 +1210,13 @@ function selectSlide(index, { scroll = true } = {}) {
   state.panHintAt = 0;
   showClipStart(state.project.slides[index]);
   syncSlideSelection(scroll);
+  if (changed && state.quick) {
+    // быстрая правка продолжается на соседнем слайде: то же поле или первое
+    const keys = editableKeys(state.project.slides[index]);
+    if (!keys.includes(state.quick)) state.quick = keys[0] || null;
+  }
   if (changed) renderPanel();
+  if (changed && state.quick) focusField(state.quick);
   scheduleRender();
 }
 
@@ -1587,8 +1596,8 @@ function renderStage() {
   if (!slide) return;
   const L = layoutOf(slide);
   const box = stageBox();
-  // на телефоне оставляем место под стрелки листания по бокам
-  const sidePad = isWide() ? 0 : 36;
+  // на телефоне оставляем место под стрелки листания по бокам (пока печатают — их нет)
+  const sidePad = isWide() || el.editor.classList.contains('typing') || state.quick ? 0 : 36;
   const cssW = Math.floor(Math.min(box.w - sidePad * 2, box.h * L.W / L.H));
   const cssH = Math.round(cssW * L.H / L.W);
   el.stageCanvas.style.width = cssW + 'px';
@@ -1597,6 +1606,7 @@ function renderStage() {
   state.lastRender = { res, cssW, cssH, scale: cssW / L.W, layout: L };
   state.overflow[state.current] = Boolean(res.overflow);
   renderOverlay();
+  renderTextMarks();
   renderWarnings();
   const n = state.project.slides.length;
   el.slideCounter.textContent = `${state.current + 1} / ${n}`;
@@ -1813,6 +1823,156 @@ function syncSlideSelection(scroll) {
   });
 }
 
+/* ------------------------------------------------------ правка на превью */
+
+/*
+ * Нажали на текст на превью — правим это поле (render.js отдаёт, где лежит
+ * текст каждого поля: res.texts). На телефоне — быстрая правка: под
+ * превью остаётся только это поле (с «Ж / К»), ‹ › — соседний текст (и
+ * соседний слайд), «Готово» — обратно к форме. Превью при этом крупнее,
+ * редактируемый текст обведён, остальные — пунктиром: на них тоже можно
+ * нажать. На компьютере — фокус в поле справа и рамка на превью.
+ */
+let stageTap = null;   // нажатие без сдвига (pointerup) — его разбирает click
+
+function textAt(pt) {
+  const r = state.lastRender;
+  const texts = r && r.res.texts;
+  if (!texts || !texts.length) return null;
+  const pad = Math.max(16, 14 / r.scale);   // ≈ 14 px экрана вокруг текста — под палец
+  let best = null, bestD = Infinity;
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const t = texts[i];
+    const d = Math.hypot(Math.max(t.x - pt.x, 0, pt.x - t.x - t.w), Math.max(t.y - pt.y, 0, pt.y - t.y - t.h));
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return bestD <= pad ? best.key : null;
+}
+
+/* Поля слайда, которые есть на превью (выключенные строки — нет). */
+function editableKeys(slide) {
+  return slideFields(slide, layoutOf(slide)).filter(k => !isHidden(slide, k));
+}
+
+function editText(key) {
+  if (isWide()) {
+    if (state.tab !== 'slide') setTab('slide');
+    focusField(key, true);
+    return;
+  }
+  state.quick = key;
+  renderPanel();
+  focusField(key);
+  scheduleRender();
+}
+
+function finishTextEdit() {
+  if (!state.quick) return;
+  state.quick = null;
+  renderPanel();
+  scheduleRender();
+}
+
+/* Быстрая правка жива, только пока поле есть на слайде и экран узкий. */
+function syncQuick() {
+  if (state.quick && (isWide() || !state.project || !editableKeys(currentSlide()).includes(state.quick))) state.quick = null;
+  el.editor.classList.toggle('quick', Boolean(state.quick));
+}
+
+function focusField(key, scroll = false) {
+  const node = el.panelBody.querySelector(`[data-field="${key}"]`);
+  if (!node) return;
+  node.focus({ preventScroll: true });
+  // курсор — в конец текста
+  if (node.isContentEditable) {
+    const r = document.createRange();
+    r.selectNodeContents(node);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  } else if (node.setSelectionRange) {
+    try { node.setSelectionRange(node.value.length, node.value.length); } catch { /* type без выделения */ }
+  }
+  if (scroll) (node.closest('.field') || node).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+/* ‹ › в быстрой правке: соседний текст, на краю — соседний слайд. */
+function quickMove(dir) {
+  const slides = state.project.slides;
+  let i = state.current;
+  let keys = editableKeys(slides[i]);
+  let k = keys.indexOf(state.quick) + dir;
+  while (k < 0 || k >= keys.length) {
+    i += dir;
+    if (i < 0 || i >= slides.length) return;
+    keys = editableKeys(slides[i]);
+    k = dir > 0 ? 0 : keys.length - 1;
+  }
+  state.quick = keys[k];
+  if (i !== state.current) { selectSlide(i); return; }
+  renderPanel();
+  focusField(state.quick);
+  scheduleRender();
+}
+
+function buildQuickForm() {
+  const slide = currentSlide();
+  const L = layoutOf(slide);
+  const key = state.quick;
+  const keys = editableKeys(slide);
+  const k = keys.indexOf(key);
+  const base = baseKey(key);
+  const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][base]) || FIELD_INFO[base].label;
+  const block = key.match(/\d+$/);
+  const n = state.project.slides.length;
+  const first = k <= 0 && !state.project.slides.slice(0, state.current).some(s => editableKeys(s).length);
+  const last = k >= keys.length - 1 && !state.project.slides.slice(state.current + 1).some(s => editableKeys(s).length);
+  const nav = (icon, title, dir, off) => {
+    const b = h('button', { type: 'button', class: 'icon-btn sm', icon, title, 'aria-label': title, disabled: off });
+    // нажатие не уводит фокус из поля — клавиатура не прячется
+    b.addEventListener('pointerdown', e => e.preventDefault());
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.addEventListener('click', () => quickMove(dir));
+    return b;
+  };
+  const field = buildField(slide, key, state.current);
+  field.classList.add('quick-field');
+  return h('div', { class: 'quick-form' },
+    h('div', { class: 'quick-head' },
+      nav('caret-left', 'Предыдущий текст', -1, first),
+      h('div', { class: 'quick-title' },
+        h('b', { text: label + (block ? ` · блок ${block[0]}` : '') }),
+        h('span', { text: (n > 1 ? `слайд ${state.current + 1} из ${n} · ` : '') + `текст ${k + 1} из ${keys.length}` })),
+      nav('caret-right', 'Следующий текст', 1, last),
+      btn('btn btn-primary btn-sm quick-done', 'check', 'Готово', () => finishTextEdit())),
+    field);
+}
+
+/* Рамки текстов на превью: в быстрой правке — все (пунктир) и текущий,
+   иначе — только текст поля, в котором курсор. */
+function renderTextMarks() {
+  const r = state.lastRender;
+  const box = el.textMarks;
+  if (!box) return;
+  const a = document.activeElement;
+  const active = state.quick || (a && el.panelBody.contains(a) && a.dataset ? a.dataset.field : null);
+  const texts = (r && r.res.texts) || [];
+  const show = state.quick ? texts : texts.filter(t => t.key === active);
+  while (box.children.length < show.length) box.append(h('div', { class: 'text-mark' }));
+  [...box.children].forEach((node, i) => {
+    const t = show[i];
+    node.hidden = !t;
+    if (!t) return;
+    node.classList.toggle('on', t.key === active);
+    const pad = 5;
+    node.style.left = (t.x * r.scale - pad) + 'px';
+    node.style.top = (t.y * r.scale - pad) + 'px';
+    node.style.width = (t.w * r.scale + pad * 2) + 'px';
+    node.style.height = (t.h * r.scale + pad * 2) + 'px';
+  });
+}
+
 /* ---------------------------------------------------------- жесты превью */
 
 const pointers = new Map();
@@ -1915,20 +2075,30 @@ function wireStage() {
       return;
     }
     gesture = null;
-    if (g.type === 'pan') {
-      if (g.moved) settleFrame();
-      return;
-    }
+    if (g.type === 'pan' && g.moved) { settleFrame(); return; }
+    // нажатие без сдвига разбираем на click: там iOS разрешает открыть
+    // клавиатуру и окно выбора файлов, и «лишний» click после перестройки
+    // экрана не попадёт в поле, оказавшееся под пальцем
+    if (!g.moved) { stageTap = { x: g.x0, y: g.y0, inside: g.inside, at: Date.now() }; return; }
+    if (g.type === 'pan') return;
     const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
     if (!g.mouse && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.4) {
       selectSlide(state.current + (dx < 0 ? 1 : -1));
-      return;
     }
-    // тап по пустому месту под фото — выбрать фото
-    const slide = currentSlide();
-    if (!g.moved && g.inside && layoutOf(slide).photo && !(slide.photo && media.has(slide.photo.id))) pickPhotos();
   };
   stage.addEventListener('pointerup', end);
+  stage.addEventListener('click', e => {
+    const t = stageTap;
+    stageTap = null;
+    if (!t || Date.now() - t.at > 800 || e.target.closest('button')) return;
+    // нажали на текст — правим его; мимо текста в быстрой правке — выходим
+    const key = textAt(toDesign(t.x, t.y));
+    if (key) { editText(key); return; }
+    if (state.quick) { finishTextEdit(); return; }
+    // по пустому месту под фото — выбрать фото
+    const slide = currentSlide();
+    if (t.inside && layoutOf(slide).photo && !(slide.photo && media.has(slide.photo.id))) pickPhotos();
+  });
   stage.addEventListener('pointercancel', e => { pointers.delete(e.pointerId); gesture = null; });
 
   let wheelTimer = null;
@@ -1965,10 +2135,11 @@ function hideDropHint() { el.dropHint.hidden = true; }
 
 function renderPanel() {
   if (!state.project) return;
+  syncQuick();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === state.tab));
   const body = el.panelBody;
   const keepScroll = body.dataset.for === state.tab + ':' + (currentSlide() || {}).id ? body.scrollTop : 0;
-  body.replaceChildren(state.tab === 'settings' ? buildSettingsForm() : buildSlideForm());
+  body.replaceChildren(state.quick ? buildQuickForm() : state.tab === 'settings' ? buildSettingsForm() : buildSlideForm());
   body.dataset.for = state.tab + ':' + (currentSlide() || {}).id;
   body.scrollTop = keepScroll;
   body.querySelectorAll('textarea').forEach(autoGrow);
@@ -2480,7 +2651,9 @@ function buildSlideForm() {
   look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Расположение' }),
     segControl([['top', 'Сверху'], ['middle', 'Центр'], ['bottom', 'Снизу']],
       valign, v => setTextLayout('valign', v), 'Расположение текста')));
-  if (state.project.slides.some(x => textAlign(x, layoutOf(x)) !== align || textVAlign(x, layoutOf(x)) !== valign)) {
+  // «на всех» — только если на этом слайде меняли вручную (у разных макетов свои умолчания)
+  if ((slide.opts.align || slide.opts.valign) &&
+      state.project.slides.some(x => textAlign(x, layoutOf(x)) !== align || textVAlign(x, layoutOf(x)) !== valign)) {
     look.push(btn('btn btn-ghost btn-sm look-all', null, 'Так же на всех слайдах', () => setTextLayoutAll()));
   }
   // логотип: одна из 8 точек на схеме слайда
@@ -2489,7 +2662,7 @@ function buildSlideForm() {
     h('span', { class: 'lbl-col' }, h('span', { class: 'lbl', text: 'Логотип' }),
       h('span', { class: 'field-hint', text: LOGO_SPOT_NAMES[spot] })),
     logoPicker(L, spot, v => setLogoSpot(v))));
-  if (state.project.slides.some(x => logoSpot(x, layoutOf(x)) !== spot)) {
+  if (slide.opts.logo && state.project.slides.some(x => logoSpot(x, layoutOf(x)) !== spot)) {
     look.push(btn('btn btn-ghost btn-sm look-all', null, 'Логотип так же на всех слайдах', () => setLogoSpotAll()));
   }
   const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
@@ -2523,12 +2696,14 @@ function buildSlideForm() {
 
   // слайд
   const wide = isWide();
+  // на телефоне — строкой иконок (то же есть в меню по нажатию на миниатюру)
+  const act = (cls, icon, label, fn) => btn(cls, icon, label, fn, label);
   root.append(section('Слайд', null, h('div', { class: 'actions-grid' },
-    btn('btn btn-outline', 'plus', 'Новый слайд', () => openLayoutSheet('add')),
-    btn('btn btn-outline', 'copy', 'Дублировать', () => duplicateSlide()),
-    btn('btn btn-outline', wide ? 'arrow-up' : 'arrow-left', wide ? 'Выше' : 'Левее', () => moveSlide(i, i - 1)),
-    btn('btn btn-outline', wide ? 'arrow-down' : 'arrow-right', wide ? 'Ниже' : 'Правее', () => moveSlide(i, i + 1)),
-    btn('btn btn-danger', 'trash', 'Удалить слайд', () => deleteSlide()))));
+    act('btn btn-outline', 'plus', 'Новый слайд', () => openLayoutSheet('add')),
+    act('btn btn-outline', 'copy', 'Дублировать', () => duplicateSlide()),
+    act('btn btn-outline', wide ? 'arrow-up' : 'arrow-left', wide ? 'Выше' : 'Левее', () => moveSlide(i, i - 1)),
+    act('btn btn-outline', wide ? 'arrow-down' : 'arrow-right', wide ? 'Ниже' : 'Правее', () => moveSlide(i, i + 1)),
+    act('btn btn-danger', 'trash', 'Удалить слайд', () => deleteSlide()))));
 
   return root;
 }
@@ -2554,11 +2729,11 @@ function buildPhotoSection(slide) {
     rows.push(rangeRow('Масштаб', { min: 100, max: ZOOM_MAX * 100, value: Math.round((slide.photo.zoom || 1) * 100), unit: '%', key: 'zoom',
       onInput: x => { pushUndo('frame'); slide.photo.zoom = x / 100; scheduleRender(); },
       onChange: () => settleFrame() }));
-    rows.push(h('p', { class: 'field-hint', text: isTouch()
+    rows.push(h('p', { class: 'field-hint photo-hint', text: isTouch()
       ? 'Кадр двигается пальцем прямо на превью, щипок двумя пальцами — масштаб.'
       : 'Кадр двигается мышью прямо на превью, колесо — масштаб. Фото можно вставить через ⌘V или перетащить.' }));
   } else {
-    rows.push(h('p', { class: 'field-hint', style: 'margin-top:10px', text: 'Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.' }));
+    rows.push(h('p', { class: 'field-hint photo-hint', style: 'margin-top:10px', text: 'Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.' }));
   }
   return section(video ? 'Видео' : 'Фото или видео', m ? btn('btn btn-ghost btn-sm', null, 'Сбросить кадр', () => resetFrame()) : null, ...rows);
 }
@@ -3072,6 +3247,7 @@ function openHelp() {
     <ul>
       <li>На стартовом экране выберите рубрику — откроется обложка и пара карточек по макету.</li>
       <li>Пишите текст в полях под превью: слайд обновляется сразу. Бледный текст на слайде — подсказка, в готовую картинку он не попадёт.</li>
+      <li>Или нажмите на текст прямо на превью: на телефоне под слайдом останется только это поле, превью станет крупнее. ‹ › — соседний текст (и соседний слайд), «Готово» или нажатие мимо текста — обратно.</li>
       <li>«Фото или видео» на превью или в блоке «Фото». Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.</li>
       <li>Кадр двигается пальцем (или мышью) прямо на превью, щипок или колесо — масштаб.</li>
       <li>Видео ставится в то же место, что и фото. Ползунки «Начало» и «Конец» задают фрагмент (в карусели Instagram — до 60 с), «▶» на превью проигрывает его прямо в макете.</li>
@@ -3083,6 +3259,7 @@ function openHelp() {
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
       <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
+      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К · Обычный».</li>
     </ul>
     <h4>Если текст не помещается</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
@@ -3197,6 +3374,8 @@ function showHome() {
     deleteProjectMedia(state.project.id, keep);
   }
   closeSheet();
+  state.quick = null;
+  el.editor.classList.remove('quick');
   state.screen = 'home';
   state.project = null;
   freeMedia();
@@ -3214,6 +3393,11 @@ function showEditor() {
   el.editor.hidden = false;
   document.body.classList.add('editing');
   refreshEditor(true);
+  // один раз: текст можно править нажатием прямо на превью
+  if (!isWide() && !readJson(STORE_HINT_TAP, false)) {
+    writeJson(STORE_HINT_TAP, true);
+    setTimeout(() => say('Нажмите на текст на превью — его можно править прямо там', 4800), 600);
+  }
 }
 
 function refreshEditor(structure = true) {
@@ -3247,6 +3431,9 @@ function isEditable(node) {
 
 let typingTimer = null;
 function wireTyping() {
+  // рамка редактируемого текста на превью следует за фокусом
+  el.panel.addEventListener('focusin', () => scheduleRender());
+  el.panel.addEventListener('focusout', () => setTimeout(scheduleRender, 140));
   el.panel.addEventListener('focusin', e => {
     if (isWide() || !isEditable(e.target)) return;
     clearTimeout(typingTimer);

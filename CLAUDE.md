@@ -198,6 +198,24 @@ against the Figma screenshots and matches (line breaks differ only where
   fromPopup)` falls back to `editor._sel` (last non-collapsed range).
   `.rich-field { scroll-margin-bottom }` on touch keeps room below a focused
   field for the popup.
+- **Edit on the preview**: `renderSlide` returns `res.texts` (`{key, x, y,
+  w, h}` per drawn field block, recorded in `drawBlock` via the module-level
+  `textHits` while rendering; `fieldBlock` tags blocks with `key`). A tap
+  on the stage is resolved on **`click`** (pointerup only stores
+  `stageTap`): iOS opens the keyboard / file picker only from click, and
+  acting in pointerup let the follow-up click land in whatever field the
+  re-layout moved under the finger. `textAt()` picks the nearest text
+  within ~14 px. Phone: `editText(key)` sets `state.quick` → `.editor.quick`
+  (strip, tabs and nav hidden, stage flexes, panel = `buildQuickForm()`:
+  ‹ › via `quickMove` across fields and slides, «Готово» →
+  `finishTextEdit`); `syncQuick()` drops it when the field disappears or the
+  screen gets wide. Desktop: focus the field in the panel. `.text-marks`
+  over the canvas shows dashed boxes for all texts in quick mode and a
+  solid one for the field with the caret (`renderTextMarks`, every render).
+- Phone layout is compacted in the `max-width: 899px` block (48px topbar,
+  36px thumbnails, 36px tabs, tighter fields/sections, hints hidden,
+  slide actions as an icon row); «…на всех слайдах» buttons show only when
+  the slide has a manual override.
 - Drafts: `localStorage['g24.drafts.v1']`, newest first, max 60,
   read-modify-write in `saveProject()` (two tabs don't clobber each other).
 - **Photos live in IndexedDB** (`g24-media`/`files`, key

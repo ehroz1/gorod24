@@ -684,6 +684,27 @@ input[type=range] { width: 100%; accent-color: var(--blue); height: 28px; }
 .install-banner .icon-btn { color: var(--primary-text); }
 .install-banner .icon-btn:hover { background: rgba(127, 127, 127, .2); }
 
+/* ------------------------------------------- правка текста на превью */
+.text-marks { position: absolute; inset: 0; pointer-events: none; }
+.text-mark {
+  position: absolute; border-radius: 6px; border: 1.5px dashed rgba(255, 255, 255, .85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(0, 0, 0, .2);
+}
+.text-mark.on { border: 2px solid #3D8BFD; box-shadow: 0 0 0 1px rgba(255, 255, 255, .75); }
+.text-mark[hidden] { display: none; }
+
+.quick-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.quick-title { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.quick-title b { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.quick-title span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.quick-done { flex: none; height: 34px !important; }
+.quick-field { margin-bottom: 0; }
+.quick-field:not(.rich-field) .field-label,
+.quick-field .field-hint,
+.quick-field .field-label > span:first-child { display: none; }
+.quick-field.rich-field .field-label { justify-content: flex-start; position: static; padding: 0; margin: 0 0 6px; }
+.quick-field .rich.big { min-height: 64px; }
+
 /* ------------------------------------------------ телефон: печатаем */
 /* Клавиатура открыта — превью уменьшается, лента прячется, чтобы над
    полем было видно, как меняется слайд. */
@@ -709,6 +730,63 @@ input[type=range] { width: 100%; accent-color: var(--blue); height: 28px; }
   .editor.typing .stage-foot,
   .editor.typing .stage-nav { display: none; }
   .hide-sm { display: none !important; }
+
+  /* быстрая правка (нажали на текст на превью): превью — всё, что осталось
+     над полем, ленты и вкладок нет */
+  .editor.quick .slides-pane, .editor.quick .tabs, .editor.quick .stage-nav { display: none; }
+  .editor.quick .stage-pane { flex: 1 1 auto; min-height: 0; }
+  .editor.quick .stage, .editor.quick.typing .stage { flex: 1 1 auto; height: auto; min-height: 0; padding: 8px; }
+  .editor.quick .panel { flex: 0 0 auto; max-height: calc(var(--app-h) * .5); box-shadow: 0 -6px 18px rgba(0, 0, 0, .12); }
+  .editor.quick .panel-body { padding: 8px 12px calc(10px + var(--safe-b)); }
+
+  /* компактнее: второстепенное — ниже и мельче, чтобы на экране было больше полей */
+  .topbar { height: calc(48px + var(--safe-t)); padding-left: 4px; padding-right: 6px; }
+  .topbar .icon-btn { width: 40px; height: 40px; }
+  .topbar .icon-btn svg { width: 20px; height: 20px; }
+  .btn-export { height: 36px; }
+  .slides-list { gap: 7px; padding: 6px 10px; }
+  .slide-item { width: 36px; }
+  .slide-thumb { border-radius: 5px; }
+  .slide-num { left: 2px; bottom: 2px; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9.5px; }
+  .slide-dot { right: 2px; top: 2px; width: 8px; height: 8px; }
+  .slide-video { left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 4px; }
+  .slide-video [data-icon] { width: 10px; height: 10px; }
+  .slide-add { width: 36px; font-size: 0; }
+  .slide-add svg { width: 18px; height: 18px; }
+  .tabs { padding: 0 8px; }
+  .tab { height: 36px; font-size: 14px; padding: 0 10px; }
+  .panel-body { padding: 10px 14px calc(22px + var(--safe-b)); }
+  .form-head { margin-bottom: 6px; gap: 8px; }
+  .form-kicker { display: none; }
+  .form-title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .form-head .btn { height: 30px; padding: 0 11px; font-size: 13px; }
+  .section { padding: 10px 0; }
+  .section-title { font-size: 14px; margin-bottom: 8px; }
+  .section-title .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+  .field { gap: 4px; margin-bottom: 10px; }
+  .field-label { font-size: 13px; }
+  .field-label > .muted, .rich-field > .field-hint, .photo-hint, .tone-hint { display: none; }
+  .input, .textarea { padding: 8px 12px; border-radius: 10px; }
+  .textarea { min-height: 40px; }
+  .rich.big { min-height: 76px; }
+  .rich.is-empty::before { top: 8px; left: 13px; }
+  .fmt-btn { height: 28px; min-width: 32px; }
+  .subblock { margin: 12px 0 10px; padding-top: 8px; }
+  .btn-sm { height: 32px; padding: 0 12px; font-size: 13.5px; }
+  .actions-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .actions-grid .btn { height: 38px; padding: 0; gap: 0; font-size: 0; }
+  .photo-thumb { width: 48px; height: 48px; border-radius: 10px; }
+  .range-row { margin-bottom: 6px; }
+  .switch-row { min-height: 38px; }
+  .switch-row .lbl, .look-row .lbl { font-size: 14px; }
+  .look-row { min-height: 36px; margin-bottom: 4px; }
+  .look-row .seg button { height: 30px; }
+  .seg button { height: 32px; font-size: 13.5px; }
+  .look-all { margin: 0 0 6px; }
+  .logo-row { padding: 2px 0 4px; }
+  .logo-pick { width: 88px; height: 110px; }
+  .logo-pick.tall { width: 76px; height: 132px; }
+  .logo-pick button { min-height: 0; }
 }
 @media (max-width: 380px) {
   .export-label { display: none; }

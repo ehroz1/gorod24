@@ -282,6 +282,7 @@ function textBlock(ctx, text, st, scale = 1, maxWidth = 1e6, runs = null) {
  */
 function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1, boxW = b && b.maxWidth) {
   if (!b || !b.lines.length) return;
+  if (textHits && b.key) recordTextHit(b, x, capTop, align, boxW);
   ctx.save();
   ctx.font = b.font;
   setTracking(ctx, b.track);
@@ -317,6 +318,30 @@ function drawPiece(ctx, b, text, x, base) {
   } else {
     fillTracked(ctx, text, x, base, b.track);
   }
+}
+
+/*
+ * Где на слайде лежит текст каждого поля — для правки прямо на превью
+ * (нажали на текст → редактируем это поле). renderSlide собирает их в
+ * res.texts: { key, x, y, w, h } в единицах макета, по видимым строкам
+ * (с запасом на выносные элементы), по порядку отрисовки.
+ */
+let textHits = null;
+
+function recordTextHit(b, x, capTop, align, boxW) {
+  let x0 = Infinity, x1 = -Infinity;
+  for (const line of b.lines) {
+    if (!line.text) continue;
+    let lx = x, w = line.width;
+    if (align === 'center') lx = x + (boxW - w) / 2;
+    else if (align === 'right') lx = x + boxW - w;
+    else if (align === 'justify' && !line.last) w = Math.max(w, boxW);
+    x0 = Math.min(x0, lx);
+    x1 = Math.max(x1, lx + w);
+  }
+  const top = capTop - b.size * 0.12;
+  const bottom = capTop + b.height + b.size * 0.24;
+  textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top });
 }
 
 /* Строка по кускам: смена начертания и (при выравнивании по ширине) пробелы. */
@@ -735,6 +760,7 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
     text = t;
   }
   const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
+  b.key = key;
   b.ghost = f.ghost;
   b.alpha = f.ghost ? (typeof env.ghostAlpha === 'number' ? env.ghostAlpha : GHOST_ALPHA) : 1;
   return b;
@@ -1298,8 +1324,9 @@ for (const [id, L] of Object.entries(LAYOUTS)) {
  * единица = пиксель макета; env.k — сколько пикселей устройства в единице
  * (нужно для теней, которые canvas не масштабирует).
  * env: { assets: {logoWhite, logoBlack, stack}, photo, transform, ghost, k }
- * Возвращает { overflow, photo } — photo описывает область фото для UI
- * (перетаскивание кадра, кнопка «Добавить фото»).
+ * Возвращает { overflow, photo, texts } — photo описывает область фото для
+ * UI (перетаскивание кадра, кнопка «Добавить фото»), texts — где тексты
+ * полей (правка нажатием на превью).
  */
 function renderSlide(ctx, slide, env) {
   const L = LAYOUTS[slide.layout] || LAYOUTS['post'];
@@ -1307,9 +1334,12 @@ function renderSlide(ctx, slide, env) {
   ctx.fillStyle = BLACK;
   ctx.fillRect(0, 0, L.W, L.H);
   let res;
+  textHits = [];
   try {
     res = L.render(ctx, slide, env, L) || {};
+    res.texts = textHits;
   } finally {
+    textHits = null;
     if (HAS_LETTER_SPACING) ctx.letterSpacing = '0px';
     ctx.restore();
   }
