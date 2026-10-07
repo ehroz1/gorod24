@@ -10,7 +10,7 @@
  *
  * Данные проекта: { id, name, rubric, slides: [slide] }, где
  *   slide = { id, layout, fields: {title, body, …}, opts: {arrow, shade},
- *             size: {title, body}, photo: {id, zoom, x, y} | null }
+ *             size: {title, body}, photo: {id, zoom, x, y, start?, end?, adj?} | null }
  * Черновики (без фото) — в localStorage (STORE_DRAFTS), сами фото — в
  * IndexedDB под ключом «<id проекта>/<id фото>», поэтому после перезагрузки
  * вкладки (на iPhone это бывает при каждом переключении в «Фото») всё на
@@ -110,6 +110,8 @@ const state = {
   userLogo: false,
   fontsVersion: 0,
   panHintAt: 0,          // когда показали подсказку «двигайте фото»
+  adjOff: false,         // держат «оригинал» во вкладке «Фото» — превью без коррекции
+  adjDrag: false,        // тянут ползунок коррекции — превью по уменьшенной копии
 };
 
 const media = new Map();   // id фото → { blob, prev (canvas), w, h }
@@ -555,6 +557,93 @@ function downscale(src, max) {
   return c;
 }
 
+/*
+ * Коррекция фото (вкладка «Фото»): slide.photo.adj = {bright, contrast, sat,
+ * warm}, каждое от −100 до 100, 0 — как есть (нули не храним). Считаем по
+ * пикселям, а не через ctx.filter: в Safari фильтр у canvas появился поздно,
+ * а «тепло» им не сделать. Превью берёт исправленную копию m.prev из кеша,
+ * экспорт исправляет оригинал. Видео не правим: каждый кадр по пикселям —
+ * слишком медленно для записи в реальном времени.
+ */
+const ADJ_KEYS = ['bright', 'contrast', 'sat', 'warm'];
+const ADJ_CACHE_MAX = 6;
+const ADJ_SMALL = 640;             // копия для миниатюр и для превью, пока тянут ползунок
+const ADJ_BAND = 256;              // строк за один getImageData — меньше памяти на больших фото
+const adjCache = new Map();        // `${photoId}|${сигнатура}` → canvas, по давности использования
+
+function photoAdj(slide) {
+  const a = slide && slide.photo && slide.photo.adj;
+  return a && ADJ_KEYS.some(k => a[k]) ? a : null;
+}
+function adjSig(a) { return ADJ_KEYS.map(k => a[k] || 0).join(','); }
+function normalizeAdj(a) {
+  if (!a || typeof a !== 'object') return null;
+  const out = {};
+  for (const k of ADJ_KEYS) {
+    const v = Math.round(clamp(Number(a[k]) || 0, -100, 100));
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/* Яркость — гамма (светлеют средние тона, света не выбиваются), контраст —
+   вокруг середины, насыщенность через яркость Rec. 709 (−100 = ч/б), тепло —
+   усиление красного и ослабление синего (или наоборот). */
+function adjustPixels(d, a) {
+  const gamma = Math.pow(2, -(a.bright || 0) / 100 * 0.8);
+  const c = (a.contrast || 0) / 100;
+  const ct = c >= 0 ? 1 + c * 0.6 : 1 + c * 0.5;
+  const s = 1 + (a.sat || 0) / 100;
+  const w = (a.warm || 0) / 100;
+  const gr = 1 + 0.1 * w, gg = 1 + 0.02 * w, gb = 1 - 0.14 * w;
+  const tone = new Float32Array(256);
+  for (let i = 0; i < 256; i++) tone[i] = ((Math.pow(i / 255, gamma) - 0.5) * ct + 0.5) * 255;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = tone[d[i]], g = tone[d[i + 1]], b = tone[d[i + 2]];
+    if (s !== 1) {
+      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      r = y + (r - y) * s; g = y + (g - y) * s; b = y + (b - y) * s;
+    }
+    d[i] = r * gr; d[i + 1] = g * gg; d[i + 2] = b * gb;   // Uint8ClampedArray сам обрежет 0…255
+  }
+}
+
+function adjustImage(src, a) {
+  const [w, h] = mediaSize(src);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0);
+  for (let y = 0; y < h; y += ADJ_BAND) {
+    const img = ctx.getImageData(0, y, w, Math.min(ADJ_BAND, h - y));
+    adjustPixels(img.data, a);
+    ctx.putImageData(img, 0, y);
+  }
+  return c;
+}
+function freeCanvas(c) { if (c) { c.width = 0; c.height = 0; } }
+
+/* То, что рисуется в слоте фото на превью: оригинал или исправленная копия.
+   small — хватит копии поменьше (миниатюра; превью, пока тянут ползунок:
+   полный пересчёт на телефоне — заметная доля секунды). */
+function slidePhoto(slide, m, small) {
+  if (!m) return null;
+  const a = !isVideoMedia(m) && !state.adjOff && photoAdj(slide);
+  if (!a) return m.prev;
+  const key = slide.photo.id + (small ? '|s|' : '|') + adjSig(a);
+  let c = adjCache.get(key);
+  if (c) adjCache.delete(key);
+  else c = adjustImage(small ? m.small || (m.small = downscale(m.prev, ADJ_SMALL)) : m.prev, a);
+  adjCache.set(key, c);
+  while (adjCache.size > ADJ_CACHE_MAX) {
+    const [old, oc] = adjCache.entries().next().value;
+    adjCache.delete(old);
+    freeCanvas(oc);
+  }
+  return c;
+}
+function dropAdjCache() { adjCache.forEach(freeCanvas); adjCache.clear(); }
+
 function canvasToBlob(canvas, type, quality) {
   return new Promise(resolve => canvas.toBlob(resolve, type, quality));
 }
@@ -666,8 +755,10 @@ function freeMedia() {
   for (const m of media.values()) {
     if (m.kind === 'video') releaseVideo(m.prev);
     else if (m.prev) { m.prev.width = 0; m.prev.height = 0; }
+    freeCanvas(m.small);
   }
   media.clear();
+  dropAdjCache();
 }
 
 /* ------------------------------------------------------------------ видео */
@@ -1048,7 +1139,8 @@ function normalizeSlides(slides) {
     size: Object.assign({}, s.size),
     photo: s.photo && s.photo.id ? Object.assign({ id: String(s.photo.id), zoom: Number(s.photo.zoom) || 1,
       x: Number(s.photo.x) || 0, y: Number(s.photo.y) || 0 },
-      s.photo.end > 0 ? { start: Number(s.photo.start) || 0, end: Number(s.photo.end) } : {}) : null,
+      s.photo.end > 0 ? { start: Number(s.photo.start) || 0, end: Number(s.photo.end) } : {},
+      normalizeAdj(s.photo.adj) ? { adj: normalizeAdj(s.photo.adj) } : {}) : null,
   }));
 }
 
@@ -1547,15 +1639,19 @@ function autoFit(index = state.current) {
 /* -------------------------------------------------------------- отрисовка */
 
 function envFor(slide, index, extra = {}) {
-  const m = slide.photo && media.get(slide.photo.id);
-  return Object.assign({
+  const env = Object.assign({
     assets,
-    photo: m ? m.prev : null,
+    photo: null,
     transform: slide.photo || {},
     ghost: true,
     k: 1,
     cardNo: index >= 0 && state.project ? cardNo(index) : 1,
   }, extra);
+  if (!('photo' in extra)) {
+    const m = slide.photo && media.get(slide.photo.id);
+    env.photo = slidePhoto(slide, m, state.adjDrag || env.k * layoutOf(slide).W < ADJ_SMALL);
+  }
+  return env;
 }
 
 /* Рисует слайд в canvas шириной cssWidth (в CSS-пикселях). */
@@ -2186,7 +2282,8 @@ function renderPanel() {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === state.tab));
   const body = el.panelBody;
   const keepScroll = body.dataset.for === state.tab + ':' + (currentSlide() || {}).id ? body.scrollTop : 0;
-  body.replaceChildren(state.quick ? buildQuickForm() : state.tab === 'settings' ? buildSettingsForm() : buildSlideForm());
+  body.replaceChildren(state.quick ? buildQuickForm() : state.tab === 'settings' ? buildSettingsForm()
+    : state.tab === 'photo' ? buildAdjustForm() : buildSlideForm());
   body.dataset.for = state.tab + ':' + (currentSlide() || {}).id;
   body.scrollTop = keepScroll;
   body.querySelectorAll('textarea').forEach(autoGrow);
@@ -2916,6 +3013,89 @@ function syncFrameInputs() {
   }
 }
 
+/* -------------------------------------------- вкладка «Фото»: коррекция */
+
+const ADJ_ROWS = [['bright', 'Яркость'], ['contrast', 'Контраст'], ['sat', 'Насыщенность'], ['warm', 'Тепло']];
+const ADJ_PRESETS = [
+  ['Ч/б', { sat: -100, contrast: 15 }],
+  ['Тёплое', { warm: 45, sat: 10 }],
+  ['Холодное', { warm: -45 }],
+  ['Сочное', { contrast: 20, sat: 30 }],
+  ['Светлее', { bright: 30, contrast: -10 }],
+  ['Мягкое', { bright: 10, contrast: -30, sat: -20 }],
+];
+
+function setAdj(slide, next, undoKey) {
+  pushUndo(undoKey || null);
+  const a = normalizeAdj(next);
+  if (a) slide.photo.adj = a;
+  else delete slide.photo.adj;
+  scheduleRender();
+  scheduleSave();
+}
+
+function isPhotoSlide(slide) {
+  const m = layoutOf(slide).photo && slideMedia(slide);
+  return Boolean(m && !isVideoMedia(m));
+}
+
+function buildAdjustForm() {
+  const slide = currentSlide();
+  const L = layoutOf(slide);
+  const m = slideMedia(slide);
+  const root = h('div', { class: 'adjust-form' });
+  const note = text => h('p', { class: 'field-hint', text });
+  if (!L.photo || !m || isVideoMedia(m)) {
+    root.append(section('Коррекция фото', null,
+      note(!L.photo ? 'На этом макете нет фото — выберите слайд с фото.'
+        : !m ? 'Сначала добавьте фото — потом здесь можно поправить яркость, контраст и цвет.'
+          : 'Коррекция работает только для фото: видео экспортируется как есть.'),
+      L.photo && !m ? btn('btn btn-primary btn-sm adj-pick', 'image', 'Выбрать фото', () => pickPhotos()) : null));
+    return root;
+  }
+  const a = slide.photo.adj || {};
+  const sig = adjSig(a);
+  const chips = h('div', { class: 'chips adj-presets' }, ...ADJ_PRESETS.map(([name, p]) => {
+    const on = adjSig(p) === sig;
+    return h('button', { type: 'button', class: 'chip-btn' + (on ? ' on' : ''), text: name, 'aria-pressed': String(on),
+      onclick: () => { setAdj(slide, on ? null : p); renderPanel(); } });
+  }));
+  const rows = ADJ_ROWS.map(([key, label]) => rangeRow(label, { min: -100, max: 100, value: a[key] || 0, key: 'adj-' + key,
+    onInput: x => { state.adjDrag = true; setAdj(slide, Object.assign({}, slide.photo.adj, { [key]: x }), 'adj:' + slide.id + ':' + key); },
+    onChange: () => { state.adjDrag = false; scheduleRender(); renderPanel(); } }));
+  // удерживаешь — на превью оригинал
+  const cmp = btn('btn btn-outline btn-sm adj-compare', 'eye', 'Удерживайте — оригинал');
+  cmp.disabled = !photoAdj(slide);
+  const hold = on => { if (state.adjOff === on) return; state.adjOff = on; cmp.classList.toggle('on', on); scheduleRender(); };
+  cmp.addEventListener('pointerdown', e => { e.preventDefault(); hold(true); });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) cmp.addEventListener(t, () => hold(false));
+  cmp.addEventListener('contextmenu', e => e.preventDefault());
+  cmp.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); hold(true); } });
+  cmp.addEventListener('keyup', () => hold(false));
+  const reset = photoAdj(slide) ? btn('btn btn-ghost btn-sm', null, 'Сбросить', () => { setAdj(slide, null); renderPanel(); }) : null;
+  root.append(section('Коррекция фото', reset,
+    chips,
+    h('div', { style: 'height:10px' }),
+    ...rows,
+    note('Насыщенность до упора влево — чёрно-белое. Тепло: влево — холоднее, вправо — теплее.'),
+    h('div', { class: 'adj-foot' }, cmp)));
+  // те же настройки на остальные фото проекта
+  const others = state.project.slides.filter(x => x !== slide && isPhotoSlide(x) && adjSig(x.photo.adj || {}) !== sig);
+  if (others.length) {
+    root.append(section(null, null, btn('btn btn-outline btn-sm', null,
+      photoAdj(slide) ? 'Так же на всех фото' : 'Убрать коррекцию со всех фото', () => {
+        pushUndo();
+        for (const x of others) {
+          if (photoAdj(slide)) x.photo.adj = Object.assign({}, slide.photo.adj);
+          else delete x.photo.adj;
+        }
+        commit({ panel: true });
+        say(`Готово: ещё ${others.length} фото`);
+      })));
+  }
+  return root;
+}
+
 function buildSettingsForm() {
   const root = h('div', { class: 'settings-form' });
 
@@ -3079,10 +3259,13 @@ async function renderExport(slide, index) {
   ctx.setTransform(k, 0, 0, k, 0, 0);
   ctx.imageSmoothingQuality = 'high';
   const m = L.photo && slide.photo && media.get(slide.photo.id);
-  let full = null;
+  let full = null, fixed = null;
   if (m && !isVideoMedia(m)) { try { full = await decodeBlob(m.blob); } catch { full = null; } }
-  renderSlide(ctx, slide, envFor(slide, index, { ghost: false, k, photo: full || (m ? m.prev : null) }));
+  const a = m && !isVideoMedia(m) && photoAdj(slide);
+  if (a) { fixed = adjustImage(full || m.prev, a); releaseImage(full); full = null; }
+  renderSlide(ctx, slide, envFor(slide, index, { ghost: false, k, photo: fixed || full || (m ? m.prev : null) }));
   releaseImage(full);
+  freeCanvas(fixed);
   return canvas;
 }
 
@@ -3698,7 +3881,7 @@ function openMagicSheet() {
     if (n > 8) rows.push(h('li', { class: 'muted', text: `…и ещё ${n - 8}` }));
     const total = n + 1;
     summary.replaceChildren(
-      h('div', { class: 'magic-total', text: `Получится ${total} ${plural(total, 'слайд', 'слайда', 'слайдов')}` + (total > 20 ? ' — в карусели Instagram до 20' : '') }),
+      h('div', { class: 'magic-total', text: `Получится ${total} ${pluralRu(total, 'слайд', 'слайда', 'слайдов')}` + (total > 20 ? ' — в карусели Instagram до 20' : '') }),
       h('ol', { class: 'magic-list' }, ...rows));
     go.disabled = false;
   };
@@ -3730,7 +3913,7 @@ function openMagicSheet() {
     openProject(p);
     saveProject();
     if (picked.length) addPhotos(picked, 0);
-    say(`Готово: ${p.slides.length} ${plural(p.slides.length, 'слайд', 'слайда', 'слайдов')} — проверьте тексты`);
+    say(`Готово: ${p.slides.length} ${pluralRu(p.slides.length, 'слайд', 'слайда', 'слайдов')} — проверьте тексты`);
   };
 
   renderChips();
@@ -3744,13 +3927,6 @@ function openMagicSheet() {
   refresh();
   openSheet('Карусель из текста', body);
   setTimeout(() => area.focus(), 250);
-}
-
-function plural(n, one, few, many) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
 }
 
 /* ------------------------------------------------------------ стартовый */
@@ -3810,7 +3986,9 @@ function renderHome() {
               paint(small);
               return;
             }
-            const img = await decodeBlob(blob); const small = downscale(img, 600); releaseImage(img); paint(small);
+            const img = await decodeBlob(blob); const small = downscale(img, 600); releaseImage(img);
+            const a = photoAdj(first);
+            paint(a ? adjustImage(small, a) : small);
           } catch { /* без фото */ }
         });
       }
