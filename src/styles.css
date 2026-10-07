@@ -494,6 +494,27 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .seg.icons button svg { width: 18px; height: 18px; }
 .look-all { margin: 2px 0 10px; }
 
+/* логотип: схема слайда с 8 точками */
+.logo-row { align-items: flex-start; padding: 4px 0 8px; }
+.lbl-col { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.logo-pick {
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+  width: 112px; height: 140px; padding: 3px; border-radius: 12px; flex: none;
+  background: var(--well); border: 1px solid var(--line-strong);
+}
+.logo-pick button {
+  border: 0; background: transparent; border-radius: 9px; min-height: 36px;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.logo-pick button span {
+  width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted);
+  transition: transform .12s, background .12s;
+}
+.logo-pick button:hover { background: var(--hover); }
+.logo-pick button.on span { background: var(--text); border-color: var(--text); transform: scale(1.35); }
+.logo-pick button:focus-visible { outline: none; box-shadow: var(--focus); }
+.logo-pick.tall { width: 96px; height: 170px; }
+
 .photo-row { display: flex; align-items: center; gap: 12px; }
 .photo-thumb {
   width: 64px; height: 64px; border-radius: 12px; flex: none; overflow: hidden;

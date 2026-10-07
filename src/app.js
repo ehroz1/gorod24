@@ -1391,6 +1391,28 @@ function setTextLayoutAll() {
   say('Выравнивание и расположение — как на этом слайде');
 }
 
+/* Логотип в одной из 8 точек (opts.logo); точка из макета — настройку убираем. */
+function setLogoSpot(spot) {
+  const slide = currentSlide();
+  pushUndo();
+  putLogoSpot(slide, spot);
+  commit({ panel: true });
+}
+
+function putLogoSpot(slide, spot) {
+  if (spot === (layoutOf(slide).logo || 'tr')) delete slide.opts.logo;
+  else slide.opts.logo = spot;
+}
+
+function setLogoSpotAll() {
+  const src = currentSlide();
+  const spot = logoSpot(src, layoutOf(src));
+  pushUndo();
+  for (const slide of state.project.slides) putLogoSpot(slide, spot);
+  commit({ panel: true });
+  say('Логотип — ' + LOGO_SPOT_NAMES[spot].toLowerCase() + ' на всех слайдах');
+}
+
 /* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
 function setTone(on) {
   const slide = currentSlide();
@@ -2290,6 +2312,26 @@ function switchRow(label, checked, onChange) {
     h('span', { class: 'switch' }, input, h('span')));
 }
 
+const LOGO_SPOT_NAMES = {
+  tl: 'Слева сверху', tc: 'По центру сверху', tr: 'Справа сверху',
+  ml: 'Слева посередине', mr: 'Справа посередине',
+  bl: 'Слева снизу', bc: 'По центру снизу', br: 'Справа снизу',
+};
+
+/* Схема слайда с 8 точками: углы и середины сторон (у рилс — повыше). */
+function logoPicker(L, value, onPick) {
+  const grid = h('div', { class: 'logo-pick' + (L.H > L.W * 1.5 ? ' tall' : ''), role: 'radiogroup', 'aria-label': 'Где логотип' });
+  for (const spot of ['tl', 'tc', 'tr', 'ml', null, 'mr', 'bl', 'bc', 'br']) {
+    if (!spot) { grid.append(h('span', { 'aria-hidden': 'true' })); continue; }
+    const on = spot === value;
+    const b = h('button', { type: 'button', role: 'radio', class: on ? 'on' : '', 'aria-checked': String(on),
+      'aria-label': LOGO_SPOT_NAMES[spot], title: LOGO_SPOT_NAMES[spot] }, h('span'));
+    b.addEventListener('click', () => onPick(spot));
+    grid.append(b);
+  }
+  return grid;
+}
+
 function segControl(options, value, onPick, groupLabel) {
   const icons = options.some(o => o[2]);
   const seg = h('div', { class: 'seg' + (icons ? ' icons' : ''), role: 'radiogroup', 'aria-label': groupLabel || null });
@@ -2358,6 +2400,15 @@ function buildSlideForm() {
       valign, v => setTextLayout('valign', v), 'Расположение текста')));
   if (state.project.slides.some(x => textAlign(x, layoutOf(x)) !== align || textVAlign(x, layoutOf(x)) !== valign)) {
     look.push(btn('btn btn-ghost btn-sm look-all', null, 'Так же на всех слайдах', () => setTextLayoutAll()));
+  }
+  // логотип: одна из 8 точек на схеме слайда
+  const spot = logoSpot(slide, L);
+  look.push(h('div', { class: 'look-row logo-row' },
+    h('span', { class: 'lbl-col' }, h('span', { class: 'lbl', text: 'Логотип' }),
+      h('span', { class: 'field-hint', text: LOGO_SPOT_NAMES[spot] })),
+    logoPicker(L, spot, v => setLogoSpot(v))));
+  if (state.project.slides.some(x => logoSpot(x, layoutOf(x)) !== spot)) {
+    look.push(btn('btn btn-ghost btn-sm look-all', null, 'Логотип так же на всех слайдах', () => setLogoSpotAll()));
   }
   const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
   tone.querySelector('.lbl').prepend(h('span', { class: 'swatch', 'aria-hidden': 'true' }));
@@ -2949,6 +3000,7 @@ function openHelp() {
       <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный), «К» (курсив) или «Обычный». На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
+      <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
     </ul>
     <h4>Если текст не помещается</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>

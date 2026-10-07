@@ -115,6 +115,17 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   justify stretches spaces except on a paragraph's last line. **With
   default opts every layout must stay pixel-identical** — render all layouts
   before/after a change and diff (that is how this was verified).
+- **Logo position**: `slide.opts.logo` ∈ `LOGO_SPOTS` (tl tc tr ml mr bl bc
+  br; default `L.logo`, `'tr'` if unset). `logoBox(slide, L, def)` returns
+  the layout's own box untouched for the default spot, otherwise places
+  `def`'s size in `L.logoFrame` (posts: `LOGO_FRAME_POST` = margins 90 /
+  148 / 150; reels: the safe zone). `textRegion(slide, L)` derives the text
+  region from the logo row (top → starts at `LOGO_SAFE`, bottom → ends at
+  `CARD_BOTTOM`, else `CARD_TOP`…`COVER_BOTTOM`; reels have their own
+  numbers) — the defaults reproduce the old fixed regions exactly.
+  Strip layouts apply the same rule locally (com-top/com-bottom, fav-card,
+  ev-card body); com-* pick a white logo over the photo band and black over
+  the white part.
 - **Bold / italic inside a field**: `slide.fmt[key] = [[len, flags], …]`
   (run lengths covering the whole text; flags 1 = bold, 2 = italic) next to
   the plain `fields[key]`. `fieldRuns()` ignores runs that don't add up to
@@ -155,7 +166,7 @@ against the Figma screenshots and matches (line breaks differ only where
 ### `src/app.js` — UI and state
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
-  slide: `{id, layout, fields{}, fmt?{key: runs}, opts{arrow, shade, tone, hidden{}, sections, align, valign}, size{title, body},
+  slide: `{id, layout, fields{}, fmt?{key: runs}, opts{arrow, shade, tone, hidden{}, sections, align, valign, logo}, size{title, body},
   photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).

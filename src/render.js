@@ -446,6 +446,30 @@ function drawShadeFor(ctx, W, H, top, strength, valign, center) {
 const LOGO_BOX = { x: 1198, y: 148, w: 152, h: 130 };
 const LOGO_BOX_BOTTOM = { x: 1198, y: 1520, w: 152, h: 130 };
 
+/*
+ * Логотип можно поставить в одну из 8 точек (opts.logo, переключатель в
+ * «Оформлении»): углы и середины сторон. По умолчанию — где в макете
+ * (L.logo, его рамка — та, что передал макет). Точки — в рамке
+ * L.logoFrame: у постов поля 90 по бокам, 148 сверху и 150 снизу (как
+ * у логотипа и текста в макете), у рилс — безопасная зона обложки.
+ */
+const LOGO_SPOTS = ['tl', 'tc', 'tr', 'ml', 'mr', 'bl', 'bc', 'br'];
+const LOGO_FRAME_POST = { x0: 90, x1: 1350, y0: 148, y1: 1650 };
+
+function logoSpot(slide, L) {
+  const v = slide && slide.opts && slide.opts.logo;
+  return LOGO_SPOTS.includes(v) ? v : (L.logo || 'tr');
+}
+
+function logoBox(slide, L, def) {
+  const spot = logoSpot(slide, L);
+  if (spot === (L.logo || 'tr')) return def;   // как в макете — рамка из макета без пересчёта
+  const f = L.logoFrame || LOGO_FRAME_POST;
+  const x = spot[1] === 'l' ? f.x0 : spot[1] === 'c' ? (f.x0 + f.x1 - def.w) / 2 : f.x1 - def.w;
+  const y = spot[0] === 't' ? f.y0 : spot[0] === 'm' ? (f.y0 + f.y1 - def.h) / 2 : f.y1 - def.h;
+  return { x, y, w: def.w, h: def.h };
+}
+
 function drawLogo(ctx, env, box, color) {
   const logo = color === BLACK ? env.assets.logoBlack : env.assets.logoWhite;
   if (!logo) return;
@@ -754,6 +778,17 @@ const COVER_BOTTOM = 1650;   // низ текста на всех обложка
 const MARGIN = 90;
 const COL_W = 1260;
 const LOGO_SAFE = 330;       // выше этой линии текст залезает на логотип
+const CARD_TOP = 150;        // верх текста, когда логотип не сверху
+const CARD_BOTTOM = 1480;    // низ текста, когда логотип внизу
+
+/* Область для текста по высоте: логотип вверху — текст начинается под ним,
+   внизу — заканчивается над ним (в макете: обложки — логотип вверху,
+   белые карточки интервью — внизу). */
+function textRegion(slide, L) {
+  const row = logoSpot(slide, L)[0];
+  if (L.H === 1920) return [row === 't' ? REELS_TOP : REELS_SAFE_TOP, row === 'b' ? REELS_LOGO_ABOVE : REELS_BOTTOM];
+  return [row === 't' ? LOGO_SAFE : CARD_TOP, row === 'b' ? CARD_BOTTOM : COVER_BOTTOM];
+}
 
 /* Обложка: фото на весь слайд, тень, логотип, заголовок + подзаголовок
    (в макете — снизу; сверху текст начинается под логотипом). */
@@ -766,16 +801,17 @@ function renderCover(ctx, slide, env, L, spec) {
   const sub = fieldBlock(ctx, slide, env, L, 'subtitle', spec.sub, 'body', maxW);
   const items = [{ block: title }, { block: sub, gapAbove: spec.gap || 60 }];
   const h = stackDown(items, 0);
-  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(h, rTop, rBottom, valign, H / 2);
   stackDown(items, top);
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, spec.shadeTop, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, spec.logo || LOGO_BOX, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, spec.logo || LOGO_BOX), WHITE);
   if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
   drawBlock(ctx, title, x, items[0].top, ink(slide), align, alphaOf(title));
   drawBlock(ctx, sub, x, items[1].top, ink(slide), align, alphaOf(sub));
-  const overflow = (real(title) || real(sub)) && (top < LOGO_SAFE || top + h > COVER_BOTTOM);
+  const overflow = (real(title) || real(sub)) && (top < rTop || top + h > rBottom);
   return { overflow, photo };
 }
 
@@ -795,15 +831,13 @@ function arrowOn(slide, L) {
    логотип внизу справа. Можно добавить ещё блоки «заголовок + текст»
    (sectionCount) — они идут ниже с зазором SECTION_GAP. */
 const SECTION_GAP = 130;
-const CARD_TOP = 150;        // верх текста на белых карточках
-const CARD_BOTTOM = 1480;    // ниже — логотип в правом нижнем углу
 
 function renderInterviewCard(ctx, slide, env, L) {
   const { W, H } = L;
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
-  drawLogo(ctx, env, LOGO_BOX_BOTTOM, BLACK);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX_BOTTOM), BLACK);
   const items = [];
   for (let k = 1; k <= sectionCount(slide, L); k++) {
     const [tk, bk] = sectionKeys(k);
@@ -816,10 +850,11 @@ function renderInterviewCard(ctx, slide, env, L) {
     items.push({ block: title, gapAbove: gap }, { block: body, gapAbove: titleOn ? 80 : gap });
   }
   const h = stackDown(items, 0);
-  const top = placeIn(h, CARD_TOP, CARD_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(h, rTop, rBottom, valign, H / 2);
   stackDown(items, top);
   for (const it of items) drawBlock(ctx, it.block, MARGIN, it.top, BLACK, align, alphaOf(it.block));
-  const overflow = items.some(it => real(it.block)) && (top < CARD_TOP || top + h > CARD_BOTTOM);
+  const overflow = items.some(it => real(it.block)) && (top < rTop || top + h > rBottom);
   return { overflow, photo: null };
 }
 
@@ -830,16 +865,17 @@ function renderFavoriteCard(ctx, slide, env, L) {
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
-  drawLogo(ctx, env, { x: 1198, y: 149, w: 152, h: 130 }, BLACK);
+  drawLogo(ctx, env, logoBox(slide, L, { x: 1198, y: 149, w: 152, h: 130 }), BLACK);
   if (env.assets.stack) ctx.drawImage(env.assets.stack, STACK.x, STACK.y, STACK.w, STACK.h);
   const photo = drawPhotoQuad(ctx, env, STACK_PHOTO, env.assets.stack ? null : BLACK);
   if (arrowOn(slide, L)) drawArrow(ctx, BLACK);
   const maxW = 1253;
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
-  const top = placeIn(body.height, 1268, COVER_BOTTOM, valign);
+  const logoBelow = logoSpot(slide, L)[0] === 'b';
+  const top = placeIn(body.height, 1268, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
   drawBlock(ctx, body, (W - maxW) / 2, top, BLACK, align, alphaOf(body));
   // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
-  return { overflow: real(body) && (top < 1268 || top + body.height > 1700), photo };
+  return { overflow: real(body) && (top < 1268 || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
@@ -854,12 +890,13 @@ function renderNewPlaceCard(ctx, slide, env, L) {
   const plate = boxBlock(body.height + 150, body.lines.length > 0);
   const items = [{ block: title }, { block: addr, gapAbove: 25 }, { block: plate, gapAbove: 60 }];
   const h = stackDown(items, 0);
-  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(h, rTop, rBottom, valign, H / 2);
   stackDown(items, top);
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
   if (body.lines.length) {
     const boxTop = items[2].top;
     ctx.save();
@@ -876,7 +913,7 @@ function renderNewPlaceCard(ctx, slide, env, L) {
   drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), align, alphaOf(title));
   drawBlock(ctx, addr, MARGIN, items[1].top, ink(slide), align, alphaOf(addr));
   const any = real(title) || real(addr) || real(body);
-  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM), photo };
+  return { overflow: any && (top < rTop || top + h > rBottom), photo };
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -904,12 +941,13 @@ function renderEventsCover(ctx, slide, env, L) {
   const row = boxBlock(rowH, rowH > 0);
   const items = [{ block: row }, { block: dates, gapAbove: 100 }];
   const h = stackDown(items, 0);
-  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(h, rTop, rBottom, valign, H / 2);
   stackDown(items, top);
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
   if (dates.lines.length) {
     // стрелка стоит справа на уровне дат — по правому краю даты заканчиваются перед ней
     const datesW = arrowOn(slide, L) && rowAlign(align) === 'right' ? ARROW_X - 40 - MARGIN : COL_W;
@@ -928,7 +966,7 @@ function renderEventsCover(ctx, slide, env, L) {
   }
   const any = real(num) || real(label) || real(dates);
   const tooWide = real(num) && num.width > 1260 - 300;
-  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM || tooWide), photo };
+  return { overflow: any && (top < rTop || top + h > rBottom || tooWide), photo };
 }
 
 /* Мероприятия — карточка: полароид со скрепкой, справа название/дата/место,
@@ -941,7 +979,7 @@ function renderEventCard(ctx, slide, env, L) {
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
-  drawLogo(ctx, env, LOGO_BOX, BLACK);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), BLACK);
   drawPolaroidFrame(ctx, env);
   const photo = drawPhotoQuad(ctx, env, POLAROID);
   drawPaperClip(ctx);
@@ -970,11 +1008,12 @@ function renderEventCard(ctx, slide, env, L) {
 
   // описание под полароидом: сверху полосы, «снизу» — прижато к низу
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
-  const bodyTop = valign === 'bottom' ? 1710 - body.height : 1309;
+  const bodyLimit = logoSpot(slide, L)[0] === 'b' ? CARD_BOTTOM : 1710;   // логотип внизу — описание над ним
+  const bodyTop = valign === 'bottom' ? bodyLimit - body.height : 1309;
   drawBlock(ctx, body, 88, bodyTop, BLACK, align, alphaOf(body));
   const colOverflow = (real(title) || real(date) || real(place) || real(price)) &&
     (colTop < LOGO_SAFE || colTop + h > 1240);
-  const bodyOverflow = real(body) && (bodyTop < 1309 || bodyTop + body.height > 1710);
+  const bodyOverflow = real(body) && (bodyTop < 1309 || bodyTop + body.height > bodyLimit);
   return { overflow: colOverflow || bodyOverflow, photo };
 }
 
@@ -993,19 +1032,24 @@ function renderCommerceTop(ctx, slide, env, L) {
   const items = [{ block: title }, { block: body, gapAbove: 70 }];
   const h = stackDown(items, 0);
   const MIN = 640, MAX = 1420;
+  // логотип внизу — текст заканчивается над ним
+  const logoBelow = logoSpot(slide, L)[0] === 'b';
+  const bottom = logoBelow ? CARD_BOTTOM : COVER_BOTTOM;
   let band = COM_BAND;
   let textTop = band + 126;
   if (h > 0) {
-    const fits = h <= COVER_BOTTOM - (COM_BAND + 126);
-    if (valign !== 'bottom' && fits) textTop = placeIn(h, COM_BAND + 126, COVER_BOTTOM, valign);
-    else { textTop = COVER_BOTTOM - h; band = textTop - 126; }
+    const fits = h <= bottom - (COM_BAND + 126);
+    if (valign !== 'bottom' && fits) textTop = placeIn(h, COM_BAND + 126, bottom, valign);
+    else { textTop = bottom - h; band = textTop - 126; }
   }
   if (band < MIN) { band = MIN; textTop = band + 126; }
   band = Math.min(band, MAX);
   stackDown(items, textTop);
-  const overflow = (real(title) || real(body)) && textTop + h > 1720;
+  const overflow = (real(title) || real(body)) && textTop + h > (logoBelow ? CARD_BOTTOM : 1720);
   const photo = drawPhotoRect(ctx, env, 0, 0, W, band);
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  // на фото логотип белый, на белом поле — чёрный
+  const logo = logoBox(slide, L, LOGO_BOX);
+  drawLogo(ctx, env, logo, logo.y + logo.h / 2 < band ? WHITE : BLACK);
   drawBlock(ctx, title, MARGIN, items[0].top, BLACK, align, alphaOf(title));
   drawBlock(ctx, body, MARGIN, items[1].top, BLACK, align, alphaOf(body));
   return { overflow, photo };
@@ -1025,19 +1069,22 @@ function renderCommerceBottom(ctx, slide, env, L) {
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', COL_W);
   const items = [{ block: title }, { block: body, gapAbove: 57 }];
   const h = stackDown(items, 0);
+  // логотип вверху — текст начинается под ним
+  const top0 = logoSpot(slide, L)[0] === 't' ? LOGO_SAFE : CARD_TOP;
   let bandTop = COM_BAND_TOP;
-  let textTop = CARD_TOP;
+  let textTop = top0;
   if (h > 0) {
-    const fits = h <= COM_BAND_TOP - 139 - CARD_TOP;
-    if (valign !== 'top' && fits) textTop = placeIn(h, CARD_TOP, COM_BAND_TOP - 139, valign);
-    else bandTop = CARD_TOP + h + 139;
+    const fits = h <= COM_BAND_TOP - 139 - top0;
+    if (valign !== 'top' && fits) textTop = placeIn(h, top0, COM_BAND_TOP - 139, valign);
+    else bandTop = top0 + h + 139;
   }
   stackDown(items, textTop);
   const MAX_TOP = 1160;
   const overflow = (real(title) || real(body)) && bandTop > MAX_TOP;
   bandTop = Math.min(Math.max(bandTop, 380), MAX_TOP);
   const photo = drawPhotoRect(ctx, env, 0, bandTop, W, H - bandTop);
-  drawLogo(ctx, env, LOGO_BOX_BOTTOM, WHITE);
+  const logo = logoBox(slide, L, LOGO_BOX_BOTTOM);
+  drawLogo(ctx, env, logo, logo.y + logo.h / 2 > bandTop ? WHITE : BLACK);
   drawBlock(ctx, title, MARGIN, items[0].top, BLACK, align, alphaOf(title));
   drawBlock(ctx, body, MARGIN, items[1].top, BLACK, align, alphaOf(body));
   return { overflow, photo };
@@ -1059,12 +1106,13 @@ function renderKinoCard(ctx, slide, env, L) {
   const pill = boxBlock(boxH, badge.lines.length > 0);
   const items = [{ block: title }, { block: pill, gapAbove: 60 }, { block: body, gapAbove: 38 }];
   const h = stackDown(items, 0);
-  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(h, rTop, rBottom, valign, H / 2);
   stackDown(items, top);
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 853, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
   if (badge.lines.length) {
     const a = rowAlign(align);
     const pillX = a === 'center' ? MARGIN + (COL_W - boxW) / 2 : a === 'right' ? MARGIN + COL_W - boxW : MARGIN;
@@ -1080,7 +1128,7 @@ function renderKinoCard(ctx, slide, env, L) {
   drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), align, alphaOf(title));
   drawBlock(ctx, body, MARGIN, items[2].top, ink(slide), align, alphaOf(body));
   const any = real(title) || real(badge) || real(body);
-  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM), photo };
+  return { overflow: any && (top < rTop || top + h > rBottom), photo };
 }
 
 /* Пост: заголовок крупно (в макете — по центру снизу). */
@@ -1089,29 +1137,34 @@ function renderPost(ctx, slide, env, L) {
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const maxW = 1135;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.post200, 'title', maxW);
-  const top = placeIn(title.height, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(title.height, rTop, rBottom, valign, H / 2);
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + title.height / 2);
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
   drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), align, alphaOf(title));
-  return { overflow: real(title) && (top < LOGO_SAFE || top + title.height > COVER_BOTTOM), photo };
+  return { overflow: real(title) && (top < rTop || top + title.height > rBottom), photo };
 }
 
 /* Рилс 1080×1920: логотип и заголовок в безопасной зоне обложки
    (по высоте 680…1493 — то, что видно в сетке профиля). */
 const REELS_TOP = 680, REELS_BOTTOM = 1493;
+const REELS_SAFE_TOP = 535;      // верх безопасной зоны (там логотип в макете)
+const REELS_LOGO_ABOVE = 1348;   // низ текста, когда логотип внизу зоны
+const REELS_LOGO = { x: 832, y: 535, w: 118, h: 100.14 };
 
 function renderReels(ctx, slide, env, L) {
   const { W, H } = L;
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const maxW = 741;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.reels150, 'title', maxW);
-  const top = placeIn(title.height, REELS_TOP, REELS_BOTTOM, valign);
+  const [rTop, rBottom] = textRegion(slide, L);
+  const top = placeIn(title.height, rTop, rBottom, valign);
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 830, shadeStrength(slide, L), valign, top + title.height / 2);
-  drawLogo(ctx, env, { x: 832, y: 535, w: 118, h: 100.14 }, WHITE);
+  drawLogo(ctx, env, logoBox(slide, L, REELS_LOGO), WHITE);
   drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), align, alphaOf(title));
-  return { overflow: real(title) && (top < REELS_TOP || top + title.height > REELS_BOTTOM), photo };
+  return { overflow: real(title) && (top < rTop || top + title.height > rBottom), photo };
 }
 
 /*
@@ -1120,7 +1173,9 @@ function renderReels(ctx, slide, env, L) {
  * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить),
  * sections — сколько блоков «заголовок + текст» можно добавить (см. sectionCount),
  * align / valign — выравнивание и расположение текста в макете (их можно
- * поменять на слайде), plain — поля без жирного/курсива (шрифт без них).
+ * поменять на слайде), plain — поля без жирного/курсива (шрифт без них),
+ * logo — где логотип в макете (tr, если не указано; см. logoBox),
+ * logoFrame — рамка для 8 точек логотипа, если не как у постов.
  */
 const POST = [1440, 1800];
 
@@ -1141,7 +1196,7 @@ const LAYOUTS = {
   },
   'int-card': {
     name: 'Интервью — карточка', short: 'Вопрос-ответ', size: POST,
-    fields: ['title', 'body'], photo: false, sections: 4, align: 'left', valign: 'top',
+    fields: ['title', 'body'], photo: false, sections: 4, align: 'left', valign: 'top', logo: 'br',
     ph: { title: env => String(env.cardNo || 1).padStart(2, '0') + '. Заголовок',
           body: 'Текст ответа. Пустая строка — новый абзац.',
           titleN: 'Ещё заголовок', bodyN: 'Текст' },
@@ -1197,13 +1252,13 @@ const LAYOUTS = {
   },
   'com-bottom': {
     name: 'Коммерция — фото снизу', short: 'Фото снизу', size: POST,
-    fields: ['title', 'body'], photo: true, align: 'left', valign: 'top',
+    fields: ['title', 'body'], photo: true, align: 'left', valign: 'top', logo: 'br',
     ph: { body: 'Текст карточки: пара-тройка предложений о товаре или услуге.' },
     render: renderCommerceBottom,
   },
   'kino-cover': {
     name: 'Киноафиша — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true, align: 'center', valign: 'bottom',
+    fields: ['title', 'subtitle'], photo: true, shade: true, align: 'center', valign: 'bottom', logo: 'tc',
     plain: ['subtitle'],   // подзаголовок набран BravoRG — жирного/курсива у него нет
     ph: { title: 'Киноафиша Узбекистана', subtitle: 'Самые ожидаемые премьеры сентября' },
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
@@ -1226,6 +1281,7 @@ const LAYOUTS = {
   'reels': {
     name: 'Рилс — обложка', short: 'Рилс', size: [1080, 1920],
     fields: ['title'], photo: true, shade: true, align: 'center', valign: 'bottom',
+    logoFrame: { x0: 130, x1: 950, y0: REELS_SAFE_TOP, y1: REELS_BOTTOM },
     ph: { title: 'Заголовок рилс в две-три строки' },
     render: renderReels,
   },
