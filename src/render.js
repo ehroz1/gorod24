@@ -287,7 +287,8 @@ function textBlock(ctx, text, st, scale = 1, maxWidth = 1e6, runs = null) {
  */
 function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1, boxW = b && b.maxWidth) {
   if (!b || !b.lines.length) return;
-  if (textHits && b.key) recordTextHit(b, x, capTop, align, boxW);
+  if (textHits && b.key) recordTextHit(b, x, capTop, align, boxW, color);
+  if (skipText) return;
   ctx.save();
   ctx.font = b.font;
   setTracking(ctx, b.track);
@@ -328,12 +329,13 @@ function drawPiece(ctx, b, text, x, base) {
 /*
  * Где на слайде лежит текст каждого поля — для правки прямо на превью
  * (нажали на текст → редактируем это поле) и проверок (буквы, контраст).
- * renderSlide собирает их в res.texts: { key, x, y, w, h, font, ghost } в
+ * renderSlide собирает их в res.texts: { key, x, y, w, h, font, size, color, ghost } в
  * единицах макета, по видимым строкам (с запасом на выносные элементы).
  */
 let textHits = null;
+let skipText = false;   // env.noText: всё, кроме текста (фон под ним — для проверки контраста)
 
-function recordTextHit(b, x, capTop, align, boxW) {
+function recordTextHit(b, x, capTop, align, boxW, color) {
   let x0 = Infinity, x1 = -Infinity;
   for (const line of b.lines) {
     if (!line.text) continue;
@@ -347,7 +349,7 @@ function recordTextHit(b, x, capTop, align, boxW) {
   const top = capTop - b.size * 0.12;
   const bottom = capTop + b.height + b.size * 0.24;
   textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top,
-    font: b.st.font, ghost: Boolean(b.ghost) });
+    font: b.st.font, size: b.size, color, ghost: Boolean(b.ghost) });
 }
 
 /* Строка по кускам: смена начертания / цвета, маркер и (при выравнивании
@@ -1376,11 +1378,13 @@ function renderSlide(ctx, slide, env) {
   ctx.fillRect(0, 0, L.W, L.H);
   let res;
   textHits = [];
+  skipText = Boolean(env.noText);
   try {
     res = L.render(ctx, slide, env, L) || {};
     res.texts = textHits;
   } finally {
     textHits = null;
+    skipText = false;
     if (HAS_LETTER_SPACING) ctx.letterSpacing = '0px';
     ctx.restore();
   }

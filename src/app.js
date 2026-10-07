@@ -101,6 +101,8 @@ const state = {
   lastRender: null,      // результат отрисовки текущего слайда на превью
   quick: null,           // телефон: правим это поле с превью (быстрая правка), иначе null
   glyphs: {},            // поле → буквы, которых нет в его шрифте (glyphIssues)
+  contrast: [],          // тексты, которые плохо видно на фото (contrastIssues)
+  contrastFor: null,     // id слайда, для которого посчитан contrast
   exportFormat: 'png',
   exportWidth: 1440,
   exportStory: false,    // окно «Сохранить»: посты сторис 9:16 (не запоминается)
@@ -587,18 +589,21 @@ function normalizeAdj(a) {
   return Object.keys(out).length ? out : null;
 }
 
-/* Яркость — гамма (светлеют средние тона, света не выбиваются), контраст —
+/* Яркость — гамма (светлеют средние тона, света не выбиваются; темнее —
+   ещё и светлые места притушаются, иначе белое небо так и осталось бы
+   белым), контраст —
    вокруг середины, насыщенность через яркость Rec. 709 (−100 = ч/б), тепло —
    усиление красного и ослабление синего (или наоборот). */
 function adjustPixels(d, a) {
   const gamma = Math.pow(2, -(a.bright || 0) / 100 * 0.8);
+  const dim = 1 + Math.min(0, a.bright || 0) / 100 * 0.35;
   const c = (a.contrast || 0) / 100;
   const ct = c >= 0 ? 1 + c * 0.6 : 1 + c * 0.5;
   const s = 1 + (a.sat || 0) / 100;
   const w = (a.warm || 0) / 100;
   const gr = 1 + 0.1 * w, gg = 1 + 0.02 * w, gb = 1 - 0.14 * w;
   const tone = new Float32Array(256);
-  for (let i = 0; i < 256; i++) tone[i] = ((Math.pow(i / 255, gamma) - 0.5) * ct + 0.5) * 255;
+  for (let i = 0; i < 256; i++) tone[i] = ((Math.pow(i / 255, gamma) * dim - 0.5) * ct + 0.5) * 255;
   for (let i = 0; i < d.length; i += 4) {
     let r = tone[d[i]], g = tone[d[i + 1]], b = tone[d[i + 2]];
     if (s !== 1) {
@@ -1735,7 +1740,9 @@ function renderStage() {
   renderTextMarks();
   state.glyphs = glyphIssues(slide, res.texts);
   syncGlyphWarnings();
+  if (state.contrastFor !== slide.id) { state.contrast = []; state.contrastFor = slide.id; }
   renderWarnings();
+  scheduleContrast();
   const n = state.project.slides.length;
   el.slideCounter.textContent = `${state.current + 1} / ${n}`;
   el.btnPrev.disabled = state.current === 0;
@@ -1822,6 +1829,11 @@ function renderWarnings() {
   if (glyphKeys.length) {
     const chars = [...new Set(glyphKeys.flatMap(k => state.glyphs[k].chars))].join(' ');
     items.push(h('span', { class: 'warn' }, iconSpan('warning'), wide ? `Нет в шрифте: ${chars}` : `Нет букв: ${chars}`));
+  }
+  const low = state.contrast || [];
+  if (low.length) {
+    items.push(h('span', { class: 'warn' }, iconSpan('warning'), wide ? 'Текст плохо читается на фото' : 'Плохо читается'));
+    if (low.some(x => x.light)) items.push(btn('btn btn-sm btn-outline', null, 'Затемнить', () => fixContrast()));
   }
   const vm = slideMedia(slide);
   if (isVideoMedia(vm) && clipOf(slide, vm).length > videoLimit(slide) + 0.05) {
@@ -1993,6 +2005,123 @@ function syncGlyphWarnings() {
     const text = `В шрифте ${FONT_NAMES[issue.font] || issue.font} нет ${issue.chars.length > 1 ? 'букв' : 'буквы'} ${issue.chars.join(' ')} — на слайде ${issue.chars.length > 1 ? 'они будут' : 'она будет'} шрифтом Inter`;
     if (note.textContent !== text) note.textContent = text;
   });
+}
+
+/* ------------------------------------------------- контраст текста на фото */
+/*
+ * После отрисовки (с паузой, не на каждый кадр) рисуем слайд без текста в
+ * маленький canvas (env.noText) и смотрим фон под каждым текстом: контраст
+ * по WCAG между цветом текста и каждой точкой фона, берём худшие 15 % точек
+ * — светлые пятна под белым заголовком мешают, даже если в среднем темно.
+ * Ниже порога — «Текст плохо читается» и «Затемнить»: сначала затемнение
+ * макета, потом, если мало, яркость самого фото (вкладка «Фото»).
+ */
+const CONTRAST_W = 360;          // ширина проверочного canvas, px
+const CONTRAST_MIN = 2.6;        // крупный текст
+const CONTRAST_MIN_SMALL = 3.2;  // мелкий: кегль меньше CONTRAST_SMALL_SIZE
+const CONTRAST_SMALL_SIZE = 70;
+const CONTRAST_PART = 0.15;      // доля худших точек под текстом
+const CONTRAST_DELAY_MS = 250;
+const CONTRAST_DIM_MAX = -60;    // «Затемнить» не делает фото темнее этого (яркость во вкладке «Фото»)
+const SRGB_LINEAR = new Float32Array(256).map((_, i) => {
+  const c = i / 255;
+  return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+});
+let contrastCanvas = null, contrastTimer = null;
+
+function colorLum(css) {
+  const m = /^#([0-9a-f]{6})$/i.exec(css || '');
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return 0.2126 * SRGB_LINEAR[n >> 16] + 0.7152 * SRGB_LINEAR[(n >> 8) & 255] + 0.0722 * SRGB_LINEAR[n & 255];
+}
+
+/* Тексты слайда, которые плохо видно: [{ key, ratio, light }]. over — временно
+   подменить opts / photo.adj (подбор затемнения). Только слайды с фото. */
+function contrastIssues(slide, index, over = null) {
+  const L = layoutOf(slide);
+  const m = L.photo && slideMedia(slide);
+  if (!m) return [];
+  const s = over ? Object.assign({}, slide, {
+    opts: Object.assign({}, slide.opts, over.opts),
+    photo: Object.assign({}, slide.photo, over.adj ? { adj: over.adj } : {}),
+  }) : slide;
+  const c = contrastCanvas || (contrastCanvas = document.createElement('canvas'));
+  const k = CONTRAST_W / L.W;
+  c.width = CONTRAST_W;
+  c.height = Math.round(L.H * k);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  const res = renderSlide(ctx, s, envFor(s, index, { k, ghost: false, noText: true }));
+  const data = ctx.getImageData(0, 0, c.width, c.height).data;
+  const out = [];
+  for (const t of res.texts || []) {
+    const tl = colorLum(t.color);
+    if (tl === null || t.ghost || !t.w || !t.h) continue;
+    const x0 = clamp(Math.floor(t.x * k), 0, c.width), x1 = clamp(Math.ceil((t.x + t.w) * k), 0, c.width);
+    const y0 = clamp(Math.floor(t.y * k), 0, c.height), y1 = clamp(Math.ceil((t.y + t.h) * k), 0, c.height);
+    const ratios = [];
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = (y * c.width + x) * 4;
+        const bl = 0.2126 * SRGB_LINEAR[data[i]] + 0.7152 * SRGB_LINEAR[data[i + 1]] + 0.0722 * SRGB_LINEAR[data[i + 2]];
+        ratios.push((Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05));
+      }
+    }
+    if (!ratios.length) continue;
+    ratios.sort((a, b) => a - b);
+    const ratio = ratios[Math.floor(ratios.length * CONTRAST_PART)];
+    const min = t.size < CONTRAST_SMALL_SIZE ? CONTRAST_MIN_SMALL : CONTRAST_MIN;
+    if (ratio < min) out.push({ key: t.key, ratio: Math.round(ratio * 100) / 100, light: tl > 0.4 });
+  }
+  return out;
+}
+
+function scheduleContrast() {
+  clearTimeout(contrastTimer);
+  contrastTimer = setTimeout(() => {
+    const slide = currentSlide();
+    if (!slide || state.screen !== 'editor') return;
+    let issues = [];
+    try { issues = contrastIssues(slide, state.current); } catch { issues = []; }
+    const sig = issues.map(x => x.key).join(',');
+    if (sig === (state.contrast || []).map(x => x.key).join(',')) return;
+    state.contrast = issues;
+    renderWarnings();
+  }, CONTRAST_DELAY_MS);
+}
+
+/* «Затемнить»: затемнение макета до максимума, потом — темнее само фото. */
+function fixContrast() {
+  const slide = currentSlide();
+  const L = layoutOf(slide);
+  const index = state.current;
+  const ok = over => !contrastIssues(slide, index, over).some(x => x.light);
+  const m = slideMedia(slide);
+  const shade0 = shadeStrength(slide, L);
+  const bright0 = (slide.photo.adj && slide.photo.adj.bright) || 0;
+  pushUndo();
+  let shade = shade0;
+  let done = false;
+  if (L.shade) {
+    while (shade < 1 && !done) {
+      shade = Math.min(1, Math.round((shade + 0.1) * 10) / 10);
+      done = ok({ opts: { shade } });
+    }
+    slide.opts.shade = shade;
+  }
+  let bright = bright0;
+  if (!done && m && !isVideoMedia(m)) {
+    while (bright > CONTRAST_DIM_MAX && !done) {
+      bright -= 10;
+      done = ok({ opts: { shade }, adj: Object.assign({}, slide.photo.adj, { bright }) });
+    }
+    const adj = normalizeAdj(Object.assign({}, slide.photo.adj, { bright }));
+    if (adj) slide.photo.adj = adj;
+  }
+  commit({ panel: true });
+  const what = [shade > shade0 ? 'затемнение сильнее' : '', bright < bright0 ? 'фото темнее (вкладка «Фото»)' : ''].filter(Boolean).join(', ');
+  say(done ? 'Готово: ' + what : 'Затемнил, сколько можно — попробуйте сдвинуть фото или выбрать другое', 5000);
 }
 
 /* ------------------------------------------------------ правка на превью */
