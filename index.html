@@ -514,6 +514,25 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .fmt-btn.fmt-plain { font-size: 12.5px; color: var(--muted); }
 .fmt-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
 
+/* всплывающая панель «Ж · К · Обычный» у выделенного текста (телефон) */
+.fmt-pop {
+  position: fixed; left: 0; top: 0; z-index: 45; display: flex; gap: 2px; padding: 4px;
+  border-radius: 14px; background: var(--text); color: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .28); will-change: transform;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.fmt-pop[hidden] { display: none; }
+.fmt-pop-btn {
+  min-width: 48px; height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
+  background: transparent; color: inherit; font-size: 17px; font-weight: 500; line-height: 1;
+}
+.fmt-pop-btn.fmt-bold { font-weight: 800; }
+.fmt-pop-btn.fmt-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; font-size: 19px; }
+.fmt-pop-btn.fmt-plain { font-size: 15px; }
+.fmt-pop-btn.on { background: var(--surface); color: var(--text); }
+/* у поля с форматированием снизу запас — чтобы под выделением поместилась панель */
+@media (hover: none) { .rich-field { scroll-margin-bottom: 84px; } }
+
 /* выравнивание и расположение текста */
 .look-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
   flex-wrap: wrap; min-height: 44px; margin-bottom: 6px; }
@@ -4554,13 +4573,17 @@ function fmtButton(editor, cmd, text, title) {
   return b;
 }
 
-function applyFormat(editor, cmd) {
-  if (document.activeElement !== editor) {
-    editor.focus({ preventScroll: true });
-    if (editor._range) {
-      const sel = window.getSelection();
+/* fromPopup — нажали во всплывающей панели у выделения: если касание успело
+   сбросить выделение, возвращаем последнее непустое (editor._sel). */
+function applyFormat(editor, cmd, fromPopup = false) {
+  const sel = window.getSelection();
+  const lost = document.activeElement !== editor || !sel.rangeCount || !editor.contains(sel.anchorNode);
+  if (lost || (fromPopup && sel.isCollapsed)) {
+    if (document.activeElement !== editor) editor.focus({ preventScroll: true });
+    const r = fromPopup ? editor._sel : editor._range;
+    if (r) {
       sel.removeAllRanges();
-      sel.addRange(editor._range);
+      sel.addRange(r);
     }
   }
   lastUndoKey = null;   // смена начертания — отдельный шаг отмены
@@ -4579,18 +4602,96 @@ function applyFormat(editor, cmd) {
 /* Подсветка «Ж» / «К» по месту курсора; запоминаем выделение, чтобы
    вернуть его, если нажатие на кнопку всё-таки сняло фокус (iOS). */
 function syncFmtButtons() {
+  scheduleFmtPopup();
   const ed = document.activeElement;
   if (!ed || !ed.classList || !ed.classList.contains('rich')) return;
   const sel = window.getSelection();
-  if (sel.rangeCount && ed.contains(sel.anchorNode)) ed._range = sel.getRangeAt(0).cloneRange();
+  if (sel.rangeCount && ed.contains(sel.anchorNode)) {
+    ed._range = sel.getRangeAt(0).cloneRange();
+    if (!sel.isCollapsed) ed._sel = ed._range;
+  }
+  syncFmtStates(ed);
+}
+
+/* «Ж» / «К» горят, если у курсора / выделения такое начертание. */
+function syncFmtStates(ed) {
   const wrap = ed.closest('.rich-field');
-  if (!wrap) return;
   for (const cmd of ['bold', 'italic']) {
     let on = false;
     try { on = document.queryCommandState(cmd); } catch { /* нет */ }
-    const b = wrap.querySelector('.fmt-' + cmd);
-    if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+    for (const b of [wrap && wrap.querySelector('.fmt-' + cmd), fmtPopup && fmtPopup.querySelector('.fmt-' + cmd)]) {
+      if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+    }
   }
+}
+
+/*
+ * Всплывающая панель «Ж · К · Обычный» у выделенного текста — на телефоне.
+ * В системное меню (Вырезать / Копировать / Вставить) свои пункты не
+ * добавить, а наши кнопки над полем оно закрывает. Поэтому своя панель:
+ * под выделением (системное меню встаёт над ним, «ручки» — прямо под
+ * текстом), а если снизу не помещается — над системным меню или у нижнего
+ * края видимой области. Кнопки срабатывают на касание (pointerdown) и
+ * отменяют его — так выделение и клавиатура остаются.
+ */
+let fmtPopup = null;
+let fmtPopupEditor = null;
+let fmtPopupFrame = 0;
+const POPUP_BELOW = 34;   // от низа выделения: место под «ручки»
+const POPUP_ABOVE = 64;   // над выделением: место под системное меню
+
+function buildFmtPopup() {
+  fmtPopup = h('div', { class: 'fmt-pop', role: 'toolbar', 'aria-label': 'Начертание', hidden: true });
+  for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['plain', 'Обычный', 'Обычный — убрать жирный и курсив']]) {
+    const b = h('button', { type: 'button', class: 'fmt-pop-btn fmt-' + cmd, text, title, 'aria-label': title,
+      'aria-pressed': cmd === 'plain' ? null : 'false' });
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      if (fmtPopupEditor) applyFormat(fmtPopupEditor, cmd, true);
+    });
+    // без этого касание снимает выделение и уводит фокус (Android, iOS)
+    b.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    b.addEventListener('mousedown', e => e.preventDefault());
+    fmtPopup.append(b);
+  }
+  document.body.append(fmtPopup);
+}
+
+function scheduleFmtPopup() {
+  if (fmtPopupFrame) return;
+  fmtPopupFrame = requestAnimationFrame(() => { fmtPopupFrame = 0; placeFmtPopup(); });
+}
+
+function hideFmtPopup() {
+  if (fmtPopup && !fmtPopup.hidden) fmtPopup.hidden = true;
+  fmtPopupEditor = null;
+}
+
+function placeFmtPopup() {
+  const ed = document.activeElement;
+  const sel = window.getSelection();
+  const ok = isTouch() && ed && ed.classList && ed.classList.contains('rich') && sel.rangeCount &&
+    !sel.isCollapsed && ed.contains(sel.anchorNode) && ed.contains(sel.focusNode);
+  if (!ok) { hideFmtPopup(); return; }
+  const box = sel.getRangeAt(0).getBoundingClientRect();
+  if (!box.width && !box.height) { hideFmtPopup(); return; }
+  if (!fmtPopup) buildFmtPopup();
+  fmtPopupEditor = ed;
+  fmtPopup.hidden = false;
+  syncFmtStates(ed);
+  const pw = fmtPopup.offsetWidth, ph = fmtPopup.offsetHeight;
+  // видимая область (над клавиатурой) — в координатах страницы, как у position: fixed
+  const vv = window.visualViewport;
+  const vTop = vv ? vv.offsetTop : 0, vLeft = vv ? vv.offsetLeft : 0;
+  const vBottom = vTop + (vv ? vv.height : window.innerHeight);
+  const vRight = vLeft + (vv ? vv.width : window.innerWidth);
+  let top = box.bottom + POPUP_BELOW;
+  if (top + ph > vBottom - 6) {
+    top = box.top - POPUP_ABOVE - ph;
+    if (top < vTop + 6) top = vBottom - ph - 6;
+  }
+  const left = Math.min(Math.max((box.left + box.right) / 2 - pw / 2, vLeft + 8), vRight - pw - 8);
+  fmtPopup.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
 }
 
 function rangeRow(label, { min, max, step = 1, value, unit = '', onInput, onChange, key }) {
@@ -5584,7 +5685,11 @@ function wireEvents() {
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', syncViewport);
     window.visualViewport.addEventListener('scroll', syncViewport);
+    // панель «Ж · К» у выделения едет вместе с текстом и клавиатурой
+    window.visualViewport.addEventListener('resize', scheduleFmtPopup);
+    window.visualViewport.addEventListener('scroll', scheduleFmtPopup);
   }
+  el.panelBody.addEventListener('scroll', scheduleFmtPopup, { passive: true });
   window.addEventListener('resize', () => { syncViewport(); scheduleRender(); });
   const wideQuery = window.matchMedia('(min-width: 900px)');
   const onWide = () => { if (state.screen === 'editor') refreshEditor(true); };

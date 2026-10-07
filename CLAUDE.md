@@ -185,6 +185,19 @@ against the Figma screenshots and matches (line breaks differ only where
   stale `fmt`. Their label row is `position: sticky` so the buttons stay
   visible above the iOS keyboard. Inside a `<div>` wrapper, not `<label>`
   (a label would forward clicks to the first button).
+- **Selection popup** (touch only, `isTouch()`): the OS text-selection menu
+  (Cut/Copy/Paste) can't be extended from a web page and covers the
+  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · Обычный»
+  bar (`.fmt-pop`, one global element) below a non-collapsed selection in a
+  rich field — `POPUP_BELOW` leaves room for the selection handles; if it
+  doesn't fit above the keyboard it goes `POPUP_ABOVE` the selection (over
+  the native menu) or to the bottom of the visual viewport. Repositioned on
+  `selectionchange`, panel scroll and visualViewport resize/scroll (rAF).
+  Its buttons act on `pointerdown` and cancel `touchstart`/`mousedown`, so
+  the tap neither clears the selection nor blurs the field; `applyFormat(…,
+  fromPopup)` falls back to `editor._sel` (last non-collapsed range).
+  `.rich-field { scroll-margin-bottom }` on touch keeps room below a focused
+  field for the popup.
 - Drafts: `localStorage['g24.drafts.v1']`, newest first, max 60,
   read-modify-write in `saveProject()` (two tabs don't clobber each other).
 - **Photos live in IndexedDB** (`g24-media`/`files`, key

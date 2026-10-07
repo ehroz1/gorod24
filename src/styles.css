@@ -484,6 +484,25 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .fmt-btn.fmt-plain { font-size: 12.5px; color: var(--muted); }
 .fmt-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
 
+/* всплывающая панель «Ж · К · Обычный» у выделенного текста (телефон) */
+.fmt-pop {
+  position: fixed; left: 0; top: 0; z-index: 45; display: flex; gap: 2px; padding: 4px;
+  border-radius: 14px; background: var(--text); color: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .28); will-change: transform;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.fmt-pop[hidden] { display: none; }
+.fmt-pop-btn {
+  min-width: 48px; height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
+  background: transparent; color: inherit; font-size: 17px; font-weight: 500; line-height: 1;
+}
+.fmt-pop-btn.fmt-bold { font-weight: 800; }
+.fmt-pop-btn.fmt-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; font-size: 19px; }
+.fmt-pop-btn.fmt-plain { font-size: 15px; }
+.fmt-pop-btn.on { background: var(--surface); color: var(--text); }
+/* у поля с форматированием снизу запас — чтобы под выделением поместилась панель */
+@media (hover: none) { .rich-field { scroll-margin-bottom: 84px; } }
+
 /* выравнивание и расположение текста */
 .look-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
   flex-wrap: wrap; min-height: 44px; margin-bottom: 6px; }
