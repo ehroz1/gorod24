@@ -14,7 +14,9 @@ mobile-first. UI text, comments and README are in Russian — keep it that way.
 
 No backend, no bundler, no npm dependencies. `build.py` inlines everything
 (fonts, logo, photo-stack image, icons, JS, CSS) into one `index.html`, plus
-`manifest.webmanifest` and `service-worker.js` next to it.
+`manifest.webmanifest` and `service-worker.js` next to it. The one exception
+is `vendor/heic-to.js` (HEIC decoder, ~3 MB, committed as-is, not touched by
+the build), which the page loads by `<script>` only when needed.
 
 ## Commands
 
@@ -140,6 +142,15 @@ against the Figma screenshots and matches (line breaks differ only where
   Unreferenced photos of a project are deleted when leaving the editor
   (`showHome` → `deleteProjectMedia(id, keep)`); undo snapshots may still
   reference them until then.
+- **HEIC/HEIF**: `importPhoto` tries `<img>` first (Safari decodes HEIC
+  natively); if that fails and `isHeicFile()` (MIME, extension or the
+  `ftyp` brand — Windows often gives an empty type) says HEIC, it lazy-loads
+  `vendor/heic-to.js` (`loadHeicLib`, global `HeicTo`, libheif in a Worker)
+  and decodes to an `ImageBitmap` (libheif applies irot/imir, so portrait
+  iPhone shots come out upright). HEIC is always re-encoded to JPEG before
+  it is stored, so IndexedDB/export never need the decoder. The service
+  worker caches the decoder after first use (network-first, not precached).
+  Updating it: `vendor/README.md`.
 - Undo: JSON snapshots of `slides` (+current), coalesced by key within
   `UNDO_COALESCE_MS` (typing, frame drags, sliders).
 - Rendering is scheduled (`scheduleRender` → rAF → `renderStage` +

@@ -555,18 +555,68 @@ function canvasToBlob(canvas, type, quality) {
 }
 
 /*
+ * HEIC/HEIF (фото с iPhone). Safari раскодирует их сам, Chrome, Firefox и
+ * Edge — нет: для них декодер libheif (vendor/heic-to.js, ~3 МБ) грузится
+ * отдельным файлом при первом таком фото, а не вшит в страницу. Дальше
+ * сервис-воркер держит его в кеше. В проект фото всё равно ложится JPEG.
+ */
+const HEIC_LIB = 'vendor/heic-to.js';
+const HEIC_BRANDS = ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'];
+let heicLib = null;
+
+async function isHeicFile(file) {
+  if (/hei[cf]/i.test(file.type || '') || /\.hei[cf]$/i.test(file.name || '')) return true;
+  // тип у файла бывает пустым (Windows) — смотрим на заголовок ftyp
+  try {
+    const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const box = String.fromCharCode(...head.subarray(4, 8));
+    const brand = String.fromCharCode(...head.subarray(8, 12));
+    return box === 'ftyp' && HEIC_BRANDS.includes(brand);
+  } catch { return false; }
+}
+
+function loadHeicLib() {
+  if (!heicLib) {
+    heicLib = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = HEIC_LIB;
+      script.onload = () => (window.HeicTo ? resolve(window.HeicTo) : reject(new Error('heic-to')));
+      script.onerror = () => reject(new Error('heic-to'));
+      document.head.append(script);
+    }).catch(err => { heicLib = null; throw err; });   // не загрузился — в следующий раз попробуем снова
+  }
+  return heicLib;
+}
+
+/* HEIC → ImageBitmap (поворот из файла libheif уже применил). */
+async function decodeHeic(file) {
+  let HeicTo;
+  try { HeicTo = await loadHeicLib(); } catch {
+    throw new Error(navigator.onLine === false
+      ? 'Для HEIC нужен интернет: при первом таком фото загружается декодер'
+      : 'Не получилось загрузить декодер HEIC — попробуйте ещё раз');
+  }
+  try { return await HeicTo({ blob: file, type: 'bitmap' }); } catch {
+    throw new Error('Не получилось открыть HEIC — файл повреждён или это не фото');
+  }
+}
+
+/*
  * Файл → фото проекта: уменьшаем до PHOTO_MAX (для хранения и экспорта) и
  * до PREVIEW_MAX (для превью), кладём в IndexedDB. Возвращает id фото.
  */
 async function importPhoto(file) {
-  let img;
+  let img, heic = false;
   try { img = await decodeBlob(file); } catch {
-    throw new Error('Не получилось открыть фото' + (/heic|heif/i.test(file.type + file.name) ? ' (HEIC — сохраните как JPEG)' : ''));
+    if (!(await isHeicFile(file))) throw new Error('Не получилось открыть фото');
+    img = await decodeHeic(file);
+    heic = true;
   }
   const [w, h] = mediaSize(img);
   let blob = file;
   let fw = w, fh = h;
-  const plain = /image\/(jpeg|png|webp)/.test(file.type);
+  // не JPEG/PNG/WebP (HEIC, GIF…) пересохраняем в JPEG — его откроет любой браузер
+  const plain = !heic && /image\/(jpeg|png|webp)/.test(file.type);
   if (Math.max(w, h) > PHOTO_MAX || !plain) {
     const big = downscale(img, PHOTO_MAX);
     fw = big.width; fh = big.height;
@@ -1318,7 +1368,9 @@ function setSize(group, value) {
 /* Фото: одно — на текущий слайд, несколько — по слайдам с местом под фото
    начиная с текущего; лишним фото создаются новые карточки рубрики. */
 async function addPhotos(files, startIndex = state.current) {
-  const list = [...files].filter(f => f && (/^image\//.test(f.type || 'image/') || isVideoFile(f)));
+  // HEIC с компьютера часто приходит без типа или как octet-stream — разберётся importPhoto
+  const list = [...files].filter(f => f && (/^image\//.test(f.type || 'image/') || isVideoFile(f) ||
+    /\.hei[cf]$/i.test(f.name || '') || f.type === 'application/octet-stream'));
   if (!list.length) return;
   const slides = state.project.slides;
   const targets = [];
