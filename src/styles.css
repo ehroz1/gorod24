@@ -260,6 +260,41 @@ span[data-icon] svg { width: 100%; height: 100%; }
 
 .home-extra { margin-top: 22px; display: flex; justify-content: center; }
 
+/* «Собрать карусель из текста» — только на стартовом экране */
+.magic { margin: 0 0 22px; }
+.magic-btn {
+  width: 100%; display: flex; align-items: center; gap: 14px; text-align: left;
+  padding: 14px 14px 14px 16px; border-radius: 18px; border: 0; color: #111;
+  background: linear-gradient(120deg, #FEF3BD 0%, #FFE08A 55%, #F9C6B4 100%);
+  box-shadow: 0 6px 20px rgba(112, 0, 4, .12);
+}
+.magic-btn:active { transform: scale(.99); }
+.magic-ico {
+  width: 44px; height: 44px; flex: none; border-radius: 14px; background: #111; color: #FEF3BD;
+  display: flex; align-items: center; justify-content: center;
+}
+.magic-ico svg { width: 24px; height: 24px; }
+.magic-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.magic-text b { font-size: 16px; font-weight: 800; }
+.magic-text span { font-size: 13px; opacity: .75; }
+.magic-arrow { width: 20px; height: 20px; flex: none; opacity: .6; }
+.magic-arrow svg { width: 100%; height: 100%; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn {
+  height: 34px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--text); font-weight: 600; font-size: 14px;
+}
+.chip-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
+.magic-hint { margin-top: 8px; }
+.magic-input { min-height: 150px; max-height: 42vh; overflow-y: auto; }
+.magic-input.is-empty::before { white-space: pre-wrap; }
+.magic-summary { font-size: 14px; }
+.magic-total { font-weight: 800; margin-bottom: 6px; }
+.magic-list { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.magic-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.magic-photos { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.magic-go { height: 50px; font-size: 16px; }
+
 /* ----------------------------------------------------------- редактор */
 
 .screen.editor {
