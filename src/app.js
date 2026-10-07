@@ -64,8 +64,8 @@ const RUBRIC_BY_ID = Object.fromEntries(RUBRICS.map(r => [r.id, r]));
 /* Поля формы. group: какой ползунок кегля их масштабирует. */
 const FIELD_INFO = {
   title: { label: 'Заголовок', multiline: true, group: 'title', hint: 'Enter — перенос строки' },
-  subtitle: { label: 'Подзаголовок', multiline: true, group: 'body' },
-  body: { label: 'Текст', multiline: true, big: true, group: 'body', hint: 'Пустая строка — новый абзац' },
+  subtitle: { label: 'Подзаголовок', multiline: true, group: 'body', rich: true },
+  body: { label: 'Текст', multiline: true, big: true, group: 'body', rich: true, hint: 'Пустая строка — новый абзац' },
   address: { label: 'Адрес', group: 'body', hint: '📍 добавится сам', optional: true },
   number: { label: 'Число', group: 'title', inputmode: 'numeric' },
   label: { label: 'Подпись к числу', multiline: true, group: 'title' },
@@ -462,7 +462,8 @@ function missingFonts() {
 }
 
 async function loadFonts() {
-  const specs = ['400 40px G24Title', '400 40px G24Display', '400 40px G24Body', 'italic 400 40px G24Body'];
+  const specs = ['400 40px G24Title', '400 40px G24Display', '400 40px G24Body', 'italic 400 40px G24Body',
+    '700 40px G24Body', 'italic 700 40px G24Body'];
   if (document.fonts && document.fonts.load) {
     await Promise.all(specs.map(s => document.fonts.load(s).catch(() => null)));
   }
@@ -1038,6 +1039,7 @@ function normalizeSlides(slides) {
     id: String(s.id || newId()),
     layout: s.layout,
     fields: Object.assign({}, s.fields),
+    ...(s.fmt && typeof s.fmt === 'object' && Object.keys(s.fmt).length ? { fmt: Object.assign({}, s.fmt) } : {}),
     opts: Object.assign({}, s.opts),
     size: Object.assign({}, s.size),
     photo: s.photo && s.photo.id ? Object.assign({ id: String(s.photo.id), zoom: Number(s.photo.zoom) || 1,
@@ -1263,9 +1265,30 @@ function setField(key, value) {
   const slide = currentSlide();
   pushUndo('text:' + slide.id + ':' + key);
   slide.fields[key] = value;
+  setFmt(slide, key, null);   // поле без форматирования — старые отрезки не к этому тексту
   syncAutoName();
   scheduleRender();
   scheduleSave();
+}
+
+/* Поле с форматированием: текст + отрезки жирного/курсива (см. fieldRuns в render.js). */
+function setRichField(key, text, runs) {
+  const slide = currentSlide();
+  pushUndo('text:' + slide.id + ':' + key);
+  slide.fields[key] = text;
+  setFmt(slide, key, runs);
+  syncAutoName();
+  scheduleRender();
+  scheduleSave();
+}
+
+function setFmt(slide, key, runs) {
+  if (!slide.fmt && !(runs && runs.some(r => r[1]))) return;
+  const fmt = Object.assign({}, slide.fmt);
+  if (runs && runs.some(r => r[1])) fmt[key] = runs;
+  else delete fmt[key];
+  if (Object.keys(fmt).length) slide.fmt = fmt;
+  else delete slide.fmt;
 }
 
 /* Пока название проекта не правили руками, оно повторяет заголовок обложки
@@ -1307,7 +1330,7 @@ function addSection() {
   pushUndo();
   slide.opts.sections = n + 1;
   // текст мог остаться от удалённого раньше блока — новый начинается с чистого
-  for (const key of sectionKeys(n + 1)) delete slide.fields[key];
+  for (const key of sectionKeys(n + 1)) { delete slide.fields[key]; setFmt(slide, key, null); }
   commit({ panel: true });
   // сразу в поле заголовка: клик ещё идёт, так что на iOS откроется клавиатура
   const input = el.panelBody.querySelector(`[data-field="title${n + 1}"]`);
@@ -1329,13 +1352,43 @@ function removeSection(k) {
       const from = sectionKeys(j + 1)[idx];
       if (slide.fields[from]) slide.fields[key] = slide.fields[from];
       else delete slide.fields[key];
+      setFmt(slide, key, slide.fmt && slide.fmt[from]);
     });
   }
-  for (const key of sectionKeys(n)) delete slide.fields[key];
+  for (const key of sectionKeys(n)) { delete slide.fields[key]; setFmt(slide, key, null); }
   if (n - 1 > 1) slide.opts.sections = n - 1;
   else delete slide.opts.sections;
   commit({ panel: true });
   say('Блок убран — вернуть можно кнопкой «Отменить»');
+}
+
+/* Выравнивание (opts.align) и расположение (opts.valign) текста. Выбрали то,
+   что в макете, — настройку убираем: слайд снова следует макету (и при
+   смене макета берёт его вариант). */
+function setTextLayout(key, value) {
+  const slide = currentSlide();
+  pushUndo();
+  putTextLayout(slide, key, value);
+  commit({ panel: true });
+}
+
+function putTextLayout(slide, key, value) {
+  const L = layoutOf(slide);
+  const def = key === 'align' ? (L.align || 'left') : (L.valign || 'bottom');
+  if (value === def) delete slide.opts[key];
+  else slide.opts[key] = value;
+}
+
+function setTextLayoutAll() {
+  const src = currentSlide();
+  const a = textAlign(src, layoutOf(src)), v = textVAlign(src, layoutOf(src));
+  pushUndo();
+  for (const slide of state.project.slides) {
+    putTextLayout(slide, 'align', a);
+    putTextLayout(slide, 'valign', v);
+  }
+  commit({ panel: true });
+  say('Выравнивание и расположение — как на этом слайде');
 }
 
 /* Фирменный цвет #FEF3BD (см. brandTone в render.js) — на слайд или на все сразу. */
@@ -1921,6 +1974,7 @@ function buildField(slide, key, index) {
   const info = FIELD_INFO[base];
   const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][base]) || info.label;
   const ph = placeholderFor(L, key, { cardNo: cardNo(index) }).replace(/\n/g, ' ');
+  if (info.rich && !(L.plain || []).includes(base)) return buildRichField(slide, key, label, ph, info);
   const value = slide.fields[key] || '';
   let control;
   if (info.multiline) {
@@ -1958,6 +2012,269 @@ function buildField(slide, key, index) {
   return wrap;
 }
 
+/* ------------------------------------------- текст с жирным и курсивом */
+
+/*
+ * «Текст» и «Подзаголовок» — поле contenteditable: выделил слово, нажал
+ * «Ж» / «К» (или ⌘B / ⌘I) — на слайде оно жирное / курсивом. Вставка из
+ * Заметок, Google Docs, Word, Telegram, сайтов сохраняет жирный, курсив и
+ * обычный текст, остальное оформление отбрасывается. На слайде хранятся
+ * обычный текст (fields) и отрезки начертаний (fmt). Начертание читаем из
+ * computed style — неважно, какими тегами браузер разметил жирный.
+ */
+const BLOCK_TAGS = /^(DIV|P|LI|UL|OL|DL|DT|DD|H[1-6]|BLOCKQUOTE|PRE|TR|TABLE|THEAD|TBODY|SECTION|ARTICLE|HEADER|FOOTER|ASIDE|FIGURE|FIGCAPTION|ADDRESS|HR)$/;
+const SKIP_TAGS = /^(SCRIPT|STYLE|HEAD|TITLE|META|LINK|TEMPLATE|NOSCRIPT|IFRAME|OBJECT|SVG|IMG|VIDEO|AUDIO|CANVAS|BUTTON|SELECT|INPUT|TEXTAREA)$/;
+
+function flagsToRuns(flags) {
+  const runs = [];
+  for (const f of flags) {
+    const last = runs[runs.length - 1];
+    if (last && last[1] === f) last[0]++;
+    else runs.push([1, f]);
+  }
+  return runs;
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* Текст + отрезки → HTML для поля. explicit — обычный текст тоже в span
+   с явным начертанием: при вставке внутрь жирного слова он не станет жирным. */
+function richToHtml(text, runs, explicit = false) {
+  let html = '';
+  let i = 0;
+  for (const [len, f] of runs || [[text.length, 0]]) {
+    const piece = escapeHtml(text.slice(i, i + len)).replace(/\n/g, '<br>');
+    i += len;
+    if (!piece) continue;
+    if (explicit) {
+      html += `<span style="font-weight:${f & BOLD ? 700 : 400};font-style:${f & ITALIC ? 'italic' : 'normal'}">${piece}</span>`;
+    } else {
+      html += (f & BOLD ? '<b>' : '') + (f & ITALIC ? '<i>' : '') + piece + (f & ITALIC ? '</i>' : '') + (f & BOLD ? '</b>' : '');
+    }
+  }
+  // пустая последняя строка видна в поле только с лишним <br>
+  if (text.endsWith('\n') && !explicit) html += '<br>';
+  return html;
+}
+
+/* Поле → { text, runs }. Строки: <br> и границы блоков (<div> от Enter). */
+function readRich(root) {
+  let text = '';
+  const flags = [];
+  let softBreak = false;   // последний \n — от <br>/конца блока: в конце поля он не виден
+  const add = (str, f) => { text += str; for (let k = 0; k < str.length; k++) flags.push(f); };
+  const flagsOf = node => {
+    const cs = getComputedStyle(node);
+    const w = parseInt(cs.fontWeight, 10) || (cs.fontWeight === 'bold' ? 700 : 400);
+    return (w >= 600 ? BOLD : 0) | (/italic|oblique/.test(cs.fontStyle) ? ITALIC : 0);
+  };
+  const walk = node => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const str = child.data.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n');
+        if (str) { add(str, flagsOf(child.parentElement)); softBreak = false; }
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.tagName === 'BR') { add('\n', 0); softBreak = true; continue; }
+        const block = BLOCK_TAGS.test(child.tagName);
+        if (block && text && !text.endsWith('\n')) add('\n', 0);
+        walk(child);
+        if (block && text && !text.endsWith('\n')) { add('\n', 0); softBreak = true; }
+      }
+    }
+  };
+  walk(root);
+  if (softBreak && text.endsWith('\n')) { text = text.slice(0, -1); flags.pop(); }
+  return { text, runs: flagsToRuns(flags) };
+}
+
+/*
+ * HTML из буфера обмена → { text, runs }. Жирный/курсив — по тегам (b,
+ * strong, h1–h6, i, em…), инлайн-стилям (Google Docs: <b style="font-weight:
+ * normal"> + span с font-weight:700) и правилам из <style> по классам
+ * (Pages, Word).
+ */
+function htmlToRich(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const rules = [];
+  for (const st of doc.querySelectorAll('style')) {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(st.textContent.replace(/@import[^;]*;/g, ''));
+      for (const r of sheet.cssRules) {
+        if (r.selectorText && r.style && (r.style.fontWeight || r.style.fontStyle)) {
+          rules.push([r.selectorText, r.style.fontWeight, r.style.fontStyle]);
+        }
+      }
+    } catch { /* стили не разобрались — только теги и инлайн-стили */ }
+  }
+  const weightOf = v => {
+    if (!v) return null;
+    if (/bold/.test(v)) return true;
+    if (/normal|lighter/.test(v)) return false;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n >= 600 : null;
+  };
+  const styleOf = v => (v ? /italic|oblique/.test(v) : null);
+  const chars = [];
+  const flags = [];
+  const add = (str, f) => { for (const ch of str) { chars.push(ch); flags.push(f); } };
+  // конец строки — пробелы после переноса не в счёт (между тегами блоков бывают пробелы и \n)
+  const endsNl = () => {
+    for (let k = chars.length - 1; k >= 0; k--) {
+      if (chars[k] === '\n') return true;
+      if (chars[k] !== ' ') return false;
+    }
+    return true;
+  };
+  const walk = (node, bold, italic, pre) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        let str = child.data;
+        if (!pre) str = str.replace(/[ \t\r\n\f]+/g, ' ');
+        // неразрывный пробел пока оставляем: пустой абзац Word — это <p>&nbsp;</p>
+        add(str, (bold ? BOLD : 0) | (italic ? ITALIC : 0));
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = child.tagName.toUpperCase();
+      if (SKIP_TAGS.test(tag)) continue;
+      if (tag === 'BR') { add('\n', 0); continue; }
+      let b = bold, it = italic;
+      if (/^(B|STRONG|H[1-6]|TH|DT)$/.test(tag)) b = true;
+      if (/^(I|EM|CITE|DFN|VAR)$/.test(tag)) it = true;
+      for (const [sel, w, fs] of rules) {
+        let hit = false;
+        try { hit = child.matches(sel); } catch { /* селектор не понимаем */ }
+        if (!hit) continue;
+        const wb = weightOf(w); if (wb !== null) b = wb;
+        const si = styleOf(fs); if (si !== null) it = si;
+      }
+      if (child.style) {
+        const wb = weightOf(child.style.fontWeight); if (wb !== null) b = wb;
+        const si = styleOf(child.style.fontStyle); if (si !== null) it = si;
+      }
+      const block = BLOCK_TAGS.test(tag);
+      if (block && !endsNl()) add('\n', 0);
+      if (tag === 'TD' || tag === 'TH') add(' ', 0);
+      walk(child, b, it, pre || tag === 'PRE');
+      if (block && !endsNl()) add('\n', 0);
+    }
+  };
+  walk(doc.body || doc.documentElement, false, false, false);
+  // пробелы у переносов строк, больше одной пустой строки подряд, края
+  const outC = [], outF = [];
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i] === '\u00a0' ? ' ' : chars[i];
+    if (ch === ' ' && (!outC.length || outC[outC.length - 1] === '\n' || outC[outC.length - 1] === ' ')) continue;
+    if (ch === '\n') {
+      while (outC.length && outC[outC.length - 1] === ' ') { outC.pop(); outF.pop(); }
+      if (outC.length >= 2 && outC[outC.length - 1] === '\n' && outC[outC.length - 2] === '\n') continue;
+      if (!outC.length) continue;
+    }
+    outC.push(ch); outF.push(flags[i]);
+  }
+  while (outC.length && /\s/.test(outC[outC.length - 1])) { outC.pop(); outF.pop(); }
+  return { text: outC.join(''), runs: flagsToRuns(outF.map((f, i) => (outC[i] === '\n' ? 0 : f))) };
+}
+
+function buildRichField(slide, key, label, ph, info) {
+  const runs = fieldRuns(slide, key, slide.fields[key] || '');
+  const value = slide.fields[key] || '';
+  const editor = h('div', { class: 'textarea rich' + (info.big ? ' big' : ''), contenteditable: 'true',
+    role: 'textbox', 'aria-multiline': 'true', 'aria-label': label, 'data-placeholder': ph,
+    spellcheck: 'true', autocapitalize: 'sentences', enterkeyhint: 'enter' });
+  editor.dataset.field = key;
+  editor.innerHTML = richToHtml(value, runs);
+  const syncEmpty = () => editor.classList.toggle('is-empty', !editor.textContent);
+  syncEmpty();
+  const save = () => {
+    const r = readRich(editor);
+    syncEmpty();
+    setRichField(key, r.text, r.runs);
+  };
+  editor.addEventListener('input', save);
+  editor.addEventListener('keydown', e => {
+    // подчёркивания на слайде нет — ⌘U не даём
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u') e.preventDefault();
+  });
+  editor.addEventListener('paste', e => {
+    const cd = e.clipboardData;
+    const html = cd ? cd.getData('text/html') : '';
+    const plain = cd ? cd.getData('text/plain') : '';
+    const r = html ? htmlToRich(html) : null;
+    const rich = Boolean(r && r.text.trim());
+    // в буфере только картинка (или <img> со страницы) — её подхватит общий обработчик (фото)
+    if (!rich && !plain.trim()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    lastUndoKey = null;            // вставка — отдельный шаг отмены
+    if (rich) document.execCommand('insertHTML', false, richToHtml(r.text, r.runs, true));
+    else document.execCommand('insertText', false, plain.replace(/\r\n?/g, '\n'));
+    save();
+  });
+
+  const tools = h('span', { class: 'fmt-tools', role: 'toolbar', 'aria-label': 'Начертание' },
+    fmtButton(editor, 'bold', 'Ж', 'Жирный (⌘B)'),
+    fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)'),
+    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать жирный и курсив'));
+  return h('div', { class: 'field rich-field' },
+    h('span', { class: 'field-label' }, h('span', { text: label }), tools),
+    editor,
+    info.hint ? h('span', { class: 'field-hint', text: info.hint + '. Выделите слова и нажмите «Ж» или «К».' }) : null);
+}
+
+/* Кнопка начертания: фокус и выделение остаются в поле. */
+function fmtButton(editor, cmd, text, title) {
+  const b = h('button', { type: 'button', class: 'fmt-btn fmt-' + cmd, text, title, 'aria-label': title,
+    'data-cmd': cmd, 'aria-pressed': cmd === 'plain' ? null : 'false' });
+  const keep = e => e.preventDefault();
+  b.addEventListener('mousedown', keep);
+  b.addEventListener('pointerdown', keep);
+  b.addEventListener('click', () => applyFormat(editor, cmd));
+  return b;
+}
+
+function applyFormat(editor, cmd) {
+  if (document.activeElement !== editor) {
+    editor.focus({ preventScroll: true });
+    if (editor._range) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(editor._range);
+    }
+  }
+  lastUndoKey = null;   // смена начертания — отдельный шаг отмены
+  try { document.execCommand('styleWithCSS', false, false); } catch { /* не везде есть */ }
+  if (cmd === 'plain') {
+    document.execCommand('removeFormat');
+    if (document.queryCommandState('bold')) document.execCommand('bold');
+    if (document.queryCommandState('italic')) document.execCommand('italic');
+  } else {
+    document.execCommand(cmd);
+  }
+  editor.dispatchEvent(new Event('input'));
+  syncFmtButtons();
+}
+
+/* Подсветка «Ж» / «К» по месту курсора; запоминаем выделение, чтобы
+   вернуть его, если нажатие на кнопку всё-таки сняло фокус (iOS). */
+function syncFmtButtons() {
+  const ed = document.activeElement;
+  if (!ed || !ed.classList || !ed.classList.contains('rich')) return;
+  const sel = window.getSelection();
+  if (sel.rangeCount && ed.contains(sel.anchorNode)) ed._range = sel.getRangeAt(0).cloneRange();
+  const wrap = ed.closest('.rich-field');
+  if (!wrap) return;
+  for (const cmd of ['bold', 'italic']) {
+    let on = false;
+    try { on = document.queryCommandState(cmd); } catch { /* нет */ }
+    const b = wrap.querySelector('.fmt-' + cmd);
+    if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+  }
+}
+
 function rangeRow(label, { min, max, step = 1, value, unit = '', onInput, onChange, key }) {
   const out = h('output', { text: value + unit });
   const input = h('input', { type: 'range', min, max, step, value, 'data-key': key || null, 'aria-label': label });
@@ -1973,10 +2290,13 @@ function switchRow(label, checked, onChange) {
     h('span', { class: 'switch' }, input, h('span')));
 }
 
-function segControl(options, value, onPick) {
-  const seg = h('div', { class: 'seg', role: 'radiogroup' });
-  for (const [val, label] of options) {
-    const b = h('button', { type: 'button', class: val === value ? 'on' : '', text: label, role: 'radio',
+function segControl(options, value, onPick, groupLabel) {
+  const icons = options.some(o => o[2]);
+  const seg = h('div', { class: 'seg' + (icons ? ' icons' : ''), role: 'radiogroup', 'aria-label': groupLabel || null });
+  for (const [val, label, icon] of options) {
+    // с иконкой подпись уходит в title / aria-label
+    const b = h('button', { type: 'button', class: val === value ? 'on' : '', role: 'radio',
+      text: icon ? null : label, icon: icon || null, title: icon ? label : null, 'aria-label': icon ? label : null,
       'aria-checked': String(val === value) });
     b.addEventListener('click', () => {
       seg.querySelectorAll('button').forEach(x => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
@@ -2027,6 +2347,18 @@ function buildSlideForm() {
 
   // оформление
   const look = [];
+  // выравнивание и расположение текста (по умолчанию — как в макете)
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
+  look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
+    segControl([['left', 'По левому краю', 'text-align-left'], ['center', 'По центру', 'text-align-center'],
+      ['right', 'По правому краю', 'text-align-right'], ['justify', 'По ширине', 'text-align-justify']],
+    align, v => setTextLayout('align', v), 'Выравнивание текста')));
+  look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Расположение' }),
+    segControl([['top', 'Сверху'], ['middle', 'Центр'], ['bottom', 'Снизу']],
+      valign, v => setTextLayout('valign', v), 'Расположение текста')));
+  if (state.project.slides.some(x => textAlign(x, layoutOf(x)) !== align || textVAlign(x, layoutOf(x)) !== valign)) {
+    look.push(btn('btn btn-ghost btn-sm look-all', null, 'Так же на всех слайдах', () => setTextLayoutAll()));
+  }
   const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
   tone.querySelector('.lbl').prepend(h('span', { class: 'swatch', 'aria-hidden': 'true' }));
   look.push(tone, h('p', { class: 'field-hint tone-hint', text: L.photo && L.shade
@@ -2612,6 +2944,12 @@ function openHelp() {
       <li>Видео ставится в то же место, что и фото. Ползунки «Начало» и «Конец» задают фрагмент (в карусели Instagram — до 60 с), «▶» на превью проигрывает его прямо в макете.</li>
       <li>«+» в ленте — новый слайд любого макета, в том числе из другой рубрики. Нажмите на текущий слайд в ленте ещё раз — меню: дублировать, переставить, удалить.</li>
     </ul>
+    <h4>Жирный, курсив, выравнивание</h4>
+    <ul>
+      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный), «К» (курсив) или «Обычный». На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
+      <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
+      <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
+    </ul>
     <h4>Если текст не помещается</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
     <h4>Сохранить</h4>
@@ -2620,7 +2958,7 @@ function openHelp() {
     <h4>Черновики</h4>
     <p>Всё сохраняется само — и тексты, и фото — в этом браузере. Черновики видны на стартовом экране. «Настройки → Сохранить файл» — чтобы продолжить на другом устройстве (без фото).</p>
     <h4>Горячие клавиши</h4>
-    <p><kbd>⌘Z</kbd> отменить, <kbd>⌘⇧Z</kbd> повторить, <kbd>⌘S</kbd> сохранить, <kbd>⌘V</kbd> вставить фото, <kbd>PageUp</kbd>/<kbd>PageDown</kbd> соседний слайд. На Windows вместо ⌘ — Ctrl.</p>
+    <p><kbd>⌘Z</kbd> отменить, <kbd>⌘⇧Z</kbd> повторить, <kbd>⌘S</kbd> сохранить, <kbd>⌘V</kbd> вставить фото, <kbd>⌘B</kbd> / <kbd>⌘I</kbd> жирный / курсив в поле, <kbd>PageUp</kbd>/<kbd>PageDown</kbd> соседний слайд. На Windows вместо ⌘ — Ctrl.</p>
     <h4>На телефон</h4>
     <p>Конструктор ставится как приложение: в Safari «Поделиться → На экран «Домой»», в Chrome — «Установить приложение». Работает и без интернета.</p>`;
   openSheet('Как пользоваться', body);
@@ -2779,7 +3117,9 @@ function wireTyping() {
     if (isWide() || !isEditable(e.target)) return;
     clearTimeout(typingTimer);
     el.editor.classList.add('typing');
-    setTimeout(() => e.target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 300);
+    // поле целиком, с подписью: у полей с форматированием там кнопки «Ж» / «К»
+    const target = e.target.closest('.field') || e.target;
+    setTimeout(() => target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 300);
   });
   el.panel.addEventListener('focusout', () => {
     clearTimeout(typingTimer);
@@ -2856,10 +3196,16 @@ function wireEvents() {
     if (e.key === 'PageUp' || e.key === 'ArrowLeft') { e.preventDefault(); selectSlide(state.current - 1); }
   });
 
+  // «Ж» / «К» у поля с форматированием подсвечиваются по месту курсора
+  document.addEventListener('selectionchange', syncFmtButtons);
+
   // ⌘V с картинкой — фото на текущий слайд
   document.addEventListener('paste', e => {
     if (state.screen !== 'editor') return;
-    const files = [...(e.clipboardData && e.clipboardData.files || [])].filter(f => /^image\//.test(f.type));
+    const cd = e.clipboardData;
+    // в поле вставляют текст: Word и др. кладут в буфер ещё и картинку текста — это не фото
+    if (cd && isEditable(e.target) && (cd.getData('text/plain') || '').trim()) return;
+    const files = [...(cd && cd.files || [])].filter(f => /^image\//.test(f.type));
     if (!files.length) return;
     e.preventDefault();
     addPhotos(files, state.current);

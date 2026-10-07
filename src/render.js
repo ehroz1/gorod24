@@ -129,35 +129,107 @@ function fillTracked(ctx, text, x, y, track) {
   }
 }
 
-/* Одна строка текста (без \n) → строки по ширине. */
-function wrapLine(ctx, raw, track, maxWidth, stretch = 1) {
-  const words = raw.split(/\s+/).filter(Boolean);
-  // неразрывные куски: слово-«клей» + следующее слово, куски слова через дефис
-  const units = [];
-  for (let i = 0; i < words.length; i++) {
-    const pieces = splitHyphens(words[i]);
-    pieces.forEach((p, j) => units.push({ text: p, sep: j === 0 ? ' ' : '' }));
+/*
+ * Жирный и курсив внутри текста (кнопки «Ж» / «К» в форме, вставка с
+ * форматированием). Хранятся рядом с текстом: slide.fmt[key] — отрезки
+ * [длина, флаги] подряд, сумма длин = длина текста; флаги: 1 — жирный,
+ * 2 — курсив. Не сходится с текстом (правили в старой версии) — игнорируем.
+ */
+const BOLD = 1, ITALIC = 2;
+
+function fieldRuns(slide, key, text) {
+  const runs = slide && slide.fmt && slide.fmt[key];
+  if (!Array.isArray(runs) || !runs.length) return null;
+  let sum = 0;
+  for (const r of runs) {
+    if (!Array.isArray(r) || !(r[0] > 0)) return null;
+    sum += r[0];
   }
+  return sum === text.length && runs.some(r => r[1]) ? runs : null;
+}
+
+function expandRuns(runs, length) {
+  const flags = new Uint8Array(length);
+  let i = 0;
+  for (const [len, f] of runs) { flags.fill(f & 3, i, Math.min(length, i + len)); i += len; }
+  return flags;
+}
+
+function fontSpec(st, size, f = 0) {
+  const italic = st.italic || (f & ITALIC);
+  return `${italic ? 'italic ' : ''}${f & BOLD ? 700 : 400} ${size}px ${FONT_FAMILY[st.font]}`;
+}
+
+/* Ширина куска строки: без форматирования — одним замером, с ним — по
+   отрезкам одного начертания. m = { ctx, fonts, track, stretch }. */
+function measureSlice(m, text, flags, a = 0, b = text.length) {
+  if (!flags) return measureTracked(m.ctx, text.slice(a, b), m.track, m.stretch);
+  let w = 0;
+  for (let i = a; i < b;) {
+    let j = i + 1;
+    while (j < b && flags[j] === flags[i]) j++;
+    m.ctx.font = m.fonts[flags[i]];
+    w += measureTracked(m.ctx, text.slice(i, j), m.track, m.stretch);
+    i = j;
+  }
+  m.ctx.font = m.fonts[0];
+  return w;
+}
+
+/* Абзац: пробелы схлопнуты в один, по краям обрезаны (флаги — вместе с текстом). */
+function normalizePara(raw, flags) {
+  if (!flags) return { text: raw.split(/\s+/).filter(Boolean).join(' '), flags: null };
+  let text = '';
+  const out = [];
+  let space = false;
+  for (let i = 0; i < raw.length; i++) {
+    if (/\s/.test(raw[i])) { space = text.length > 0; continue; }
+    if (space) { text += ' '; out.push(flags[i - 1] || 0); space = false; }
+    text += raw[i];
+    out.push(flags[i]);
+  }
+  const f = Uint8Array.from(out);
+  return { text, flags: f.some(Boolean) ? f : null };
+}
+
+function sliceLine(para, a, b) {
+  const flags = para.flags ? para.flags.slice(a, b) : null;
+  return { text: para.text.slice(a, b), flags: flags && flags.some(Boolean) ? flags : null };
+}
+
+/* Абзац (без \n) → строки по ширине. */
+function wrapLine(m, para, maxWidth) {
+  const text = para.text;
+  // неразрывные куски: слова и части слова через дефис (с позициями в тексте)
+  const units = [];
+  let pos = 0;
+  for (const word of text.split(' ')) {
+    let s = pos;
+    splitHyphens(word).forEach((p, j) => {
+      units.push({ text: p, start: s, end: s + p.length, sep: j === 0 ? ' ' : '' });
+      s += p.length;
+    });
+    pos += word.length + 1;
+  }
+  // слово-«клей» переносится вместе со следующим
   const groups = [];
   for (let i = 0; i < units.length; i++) {
     const prev = groups[groups.length - 1];
     const prevUnit = units[i - 1];
     const glued = prev && units[i].sep === ' ' && prevUnit && prevUnit.sep === ' ' &&
-      !HYPHENS.includes(prevUnit.text.slice(-1)) && isGlueWord(prevUnit.text) &&
-      (i < 2 || units[i - 1].sep === ' ');
-    if (glued) prev.text += ' ' + units[i].text;
-    else groups.push({ text: units[i].text, sep: units[i].sep });
+      !HYPHENS.includes(prevUnit.text.slice(-1)) && isGlueWord(prevUnit.text);
+    if (glued) prev.end = units[i].end;
+    else groups.push({ start: units[i].start, end: units[i].end });
   }
   const lines = [];
-  let line = '';
+  let ls = -1, le = -1;
   const limit = maxWidth * 1.002;
   for (const g of groups) {
-    if (!line) { line = g.text; continue; }
-    const candidate = line + g.sep + g.text;
-    if (measureTracked(ctx, candidate, track, stretch) <= limit) line = candidate;
-    else { lines.push(line); line = g.text; }
+    if (ls < 0) { ls = g.start; le = g.end; continue; }
+    if (measureSlice(m, text, para.flags, ls, g.end) <= limit) le = g.end;
+    else { lines.push(sliceLine(para, ls, le)); ls = g.start; le = g.end; }
   }
-  if (line) lines.push(line);
+  if (ls >= 0) lines.push(sliceLine(para, ls, le));
   return lines;
 }
 
@@ -165,22 +237,33 @@ function wrapLine(ctx, raw, track, maxWidth, stretch = 1) {
  * Текстовый блок: раскладывает текст по строкам и считает высоту.
  * height — от верха прописных первой строки до базовой линии последней
  * (так же, как высоты текстов в макете с text-box-trim).
+ * runs — жирный/курсив (см. fieldRuns), null — весь текст одним начертанием.
  */
-function textBlock(ctx, text, st, scale = 1, maxWidth = 1e6) {
+function textBlock(ctx, text, st, scale = 1, maxWidth = 1e6, runs = null) {
   const size = st.size * scale;
   const lead = st.lead ? st.lead * scale : size * INTER_LEAD;
   const track = (st.track || 0) * scale;
-  const font = `${st.italic ? 'italic ' : ''}400 ${size}px ${FONT_FAMILY[st.font]}`;
+  const fonts = [0, 1, 2, 3].map(f => fontSpec(st, size, f));
+  const font = fonts[0];
   const stretch = FONT_STRETCH[st.font] || 1;
+  const str = String(text || '');
+  const flags = runs ? expandRuns(runs, str.length) : null;
   ctx.save();
   ctx.font = font;
   setTracking(ctx, track);
+  const m = { ctx, fonts, track, stretch };
   const lines = [];
-  for (const raw of String(text || '').split('\n')) {
-    if (!raw.trim()) { lines.push({ text: '', width: 0 }); continue; }
-    for (const l of wrapLine(ctx, raw.trim(), track, maxWidth, stretch)) {
-      lines.push({ text: l, width: measureTracked(ctx, l, track, stretch) });
-    }
+  let pos = 0;
+  for (const raw of str.split('\n')) {
+    const para = normalizePara(raw, flags ? flags.subarray(pos, pos + raw.length) : null);
+    pos += raw.length + 1;
+    if (!para.text) { lines.push({ text: '', width: 0, flags: null, last: true }); continue; }
+    const wrapped = wrapLine(m, para, maxWidth);
+    wrapped.forEach((l, i) => {
+      l.width = measureSlice(m, l.text, l.flags);
+      l.last = i === wrapped.length - 1;   // последняя строка абзаца — без растяжки по ширине
+      lines.push(l);
+    });
   }
   ctx.restore();
   // пустые строки по краям блока не рисуются и места не занимают
@@ -188,11 +271,16 @@ function textBlock(ctx, text, st, scale = 1, maxWidth = 1e6) {
   while (lines.length && !lines[lines.length - 1].text) lines.pop();
   const cap = capRatio(ctx, st.font) * size;
   const height = lines.length ? cap + (lines.length - 1) * lead : 0;
-  const width = lines.reduce((m, l) => Math.max(m, l.width), 0);
-  return { lines, size, lead, track, font, cap, height, width, maxWidth, st, stretch };
+  const width = lines.reduce((mx, l) => Math.max(mx, l.width), 0);
+  return { lines, size, lead, track, font, fonts, cap, height, width, maxWidth, st, stretch };
 }
 
-function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1) {
+/*
+ * Рисует блок: x — левый край колонки шириной boxW (по умолчанию ширина
+ * переноса блока), align — left / center / right / justify (по ширине:
+ * пробелы растягиваются, последняя строка абзаца — по левому краю).
+ */
+function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1, boxW = b && b.maxWidth) {
   if (!b || !b.lines.length) return;
   ctx.save();
   ctx.font = b.font;
@@ -204,22 +292,86 @@ function drawBlock(ctx, b, x, capTop, color, align = 'left', alpha = 1) {
   let base = capTop + b.cap;
   for (const line of b.lines) {
     if (line.text) {
-      let lx = x;
-      if (align === 'center') lx = x + (b.maxWidth - line.width) / 2;
-      else if (align === 'right') lx = x + b.maxWidth - line.width;
-      if (b.stretch !== 1) {
-        ctx.save();
-        ctx.translate(lx, 0);
-        ctx.scale(b.stretch, 1);
-        fillTracked(ctx, line.text, 0, base, b.track);
-        ctx.restore();
-      } else {
-        fillTracked(ctx, line.text, lx, base, b.track);
+      let lx = x, gap = 0;
+      if (align === 'center') lx = x + (boxW - line.width) / 2;
+      else if (align === 'right') lx = x + boxW - line.width;
+      else if (align === 'justify' && !line.last) {
+        const spaces = line.text.split(' ').length - 1;
+        if (spaces) gap = Math.max(0, (boxW - line.width) / spaces);
       }
+      if (line.flags || gap) drawRichLine(ctx, b, line, lx, base, gap);
+      else drawPiece(ctx, b, line.text, lx, base);
     }
     base += b.lead;
   }
   ctx.restore();
+}
+
+function drawPiece(ctx, b, text, x, base) {
+  if (b.stretch !== 1) {
+    ctx.save();
+    ctx.translate(x, 0);
+    ctx.scale(b.stretch, 1);
+    fillTracked(ctx, text, 0, base, b.track);
+    ctx.restore();
+  } else {
+    fillTracked(ctx, text, x, base, b.track);
+  }
+}
+
+/* Строка по кускам: смена начертания и (при выравнивании по ширине) пробелы. */
+function drawRichLine(ctx, b, line, x, base, gap) {
+  const { text, flags } = line;
+  const m = { ctx, fonts: b.fonts, track: b.track, stretch: b.stretch };
+  let cx = x;
+  for (let i = 0; i < text.length;) {
+    const f = flags ? flags[i] : 0;
+    let j = i + 1;
+    if (text[i] !== ' ' || !gap) {
+      while (j < text.length && (flags ? flags[j] : 0) === f && !(gap && text[j] === ' ')) j++;
+    }
+    const piece = text.slice(i, j);
+    ctx.font = b.fonts[f];
+    const w = measureSlice(m, piece, null);
+    if (gap && piece === ' ') cx += w + gap;
+    else { drawPiece(ctx, b, piece, cx, base); cx += w; }
+    i = j;
+  }
+  ctx.font = b.font;
+}
+
+/*
+ * Выравнивание и расположение текста — на слайде (opts.align / opts.valign,
+ * переключатели в «Оформлении»), по умолчанию — как в макете (L.align /
+ * L.valign). Каждый макет задаёт свою область для текста; placeIn ставит в
+ * неё колонку высотой h.
+ */
+const ALIGNS = ['left', 'center', 'right', 'justify'];
+const VALIGNS = ['top', 'middle', 'bottom'];
+
+function textAlign(slide, L) {
+  const v = slide && slide.opts && slide.opts.align;
+  return ALIGNS.includes(v) ? v : (L.align || 'left');
+}
+function textVAlign(slide, L) {
+  const v = slide && slide.opts && slide.opts.valign;
+  return VALIGNS.includes(v) ? v : (L.valign || 'bottom');
+}
+
+/* Верх колонки высотой h в области [top, bottom]: сверху, снизу или по
+   центру (center — своя середина, если она не посередине области). */
+function placeIn(h, top, bottom, valign, center = (top + bottom) / 2) {
+  if (valign === 'top') return top;
+  if (valign === 'bottom') return bottom - h;
+  return Math.min(Math.max(center - h / 2, top), Math.max(top, bottom - h));
+}
+
+/* Блок одной строкой в ряд (число + подпись) не растягиваем по ширине. */
+function rowAlign(align) { return align === 'justify' ? 'left' : align; }
+
+/* Псевдоблок для stackDown: плашка или ряд заданной высоты. */
+function boxBlock(height, on = true) {
+  return { lines: on ? [true] : [], height: on ? height : 0 };
 }
 
 /* ------------------------------------------------------- фон и детали */
@@ -263,6 +415,32 @@ function drawShade(ctx, W, H, top, strength) {
   ctx.fillRect(0, top, W, H - top);
 }
 
+/* Тень под текстом там, где он стоит: снизу — как в макете, сверху — то же
+   зеркально, по центру — полоса с серединой на центре текста (мягче:
+   чёрный во всю силу посреди кадра слишком тяжёлый). */
+const SHADE_MIDDLE = 0.75;
+
+function drawShadeFor(ctx, W, H, top, strength, valign, center) {
+  if (!(strength > 0)) return;
+  const a = Math.min(1, strength);
+  const span = H - top;
+  if (valign === 'bottom') { drawShade(ctx, W, H, top, strength); return; }
+  if (valign === 'top') {
+    const g = ctx.createLinearGradient(0, 0, 0, span);
+    g.addColorStop(0, `rgba(0, 0, 0, ${a})`);
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, span);
+    return;
+  }
+  const g = ctx.createLinearGradient(0, center - span, 0, center + span);
+  g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  g.addColorStop(0.5, `rgba(0, 0, 0, ${a * SHADE_MIDDLE})`);
+  g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
 // Логотип: в макете это маска 152×129 в правом верхнем углу (1198, 149),
 // залитая белым или чёрным. Видимая часть знака — 1198…1350 × 148…278.
 const LOGO_BOX = { x: 1198, y: 148, w: 152, h: 130 };
@@ -279,6 +457,8 @@ function drawLogo(ctx, env, box, color) {
 
 // Стрелка «листай дальше»: линия 61px, толщина 10, скруглённые концы,
 // наконечник-«галочка» под 45°.
+const ARROW_X = 1285;   // левый край стрелки
+
 function drawArrow(ctx, color, y = 1687) {
   ctx.save();
   ctx.strokeStyle = color;
@@ -286,7 +466,7 @@ function drawArrow(ctx, color, y = 1687) {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(1285, y);
+  ctx.moveTo(ARROW_X, y);
   ctx.lineTo(1346, y);
   ctx.moveTo(1346 - 32.5, y - 32.5);
   ctx.lineTo(1346, y);
@@ -522,8 +702,15 @@ function sizeScale(slide, group) {
 function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform) {
   const f = fieldText(slide, env, key, layout);
   let text = f.text;
-  if (transform && text) text = transform(text);
-  const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth);
+  // у полей из layout.plain (шрифт без жирного/курсива) форматирование не рисуем
+  let runs = f.ghost || (layout.plain && layout.plain.includes(baseKey(key))) ? null : fieldRuns(slide, key, text);
+  if (transform && text) {
+    const t = transform(text);
+    // эмодзи спереди сдвигает форматирование на свою длину
+    if (runs && t !== text) runs = t.endsWith(text) ? [[t.length - text.length, 0], ...runs] : null;
+    text = t;
+  }
+  const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
   b.ghost = f.ghost;
   b.alpha = f.ghost ? (typeof env.ghostAlpha === 'number' ? env.ghostAlpha : GHOST_ALPHA) : 1;
   return b;
@@ -542,23 +729,10 @@ function withEmoji(emoji, spaced) {
 }
 
 /*
- * Колонка текстов, прижатая к низу: у последнего блока базовая линия на
- * bottom, остальные выше с зазорами (от базовой линии верхнего блока до
- * верха прописных нижнего). Возвращает верх первого блока.
+ * Колонка текстов сверху вниз с зазорами (от базовой линии верхнего блока
+ * до верха прописных нижнего; пустые блоки и их зазоры пропускаются).
+ * Ставит items[i].top, возвращает низ колонки: stackDown(items, 0) — её высота.
  */
-function stackUp(items, bottom) {
-  let y = bottom;
-  let top = bottom;
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (!it.block || !it.block.lines.length) continue;
-    it.top = y - it.block.height;
-    top = it.top;
-    y = it.top - (it.gapAbove || 0);
-  }
-  return top;
-}
-
 function stackDown(items, top) {
   let y = top;
   let bottom = top;
@@ -581,24 +755,27 @@ const MARGIN = 90;
 const COL_W = 1260;
 const LOGO_SAFE = 330;       // выше этой линии текст залезает на логотип
 
-/* Обложка: фото на весь слайд, тень, логотип, заголовок + подзаголовок снизу. */
+/* Обложка: фото на весь слайд, тень, логотип, заголовок + подзаголовок
+   (в макете — снизу; сверху текст начинается под логотипом). */
 function renderCover(ctx, slide, env, L, spec) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, spec.shadeTop, shadeStrength(slide, L));
-  drawLogo(ctx, env, spec.logo || LOGO_BOX, WHITE);
-  if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
-
-  const center = spec.align === 'center';
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const maxW = spec.maxW || COL_W;
-  const x = center ? (W - maxW) / 2 : MARGIN;
+  const x = spec.maxW ? (W - maxW) / 2 : MARGIN;
   const title = fieldBlock(ctx, slide, env, L, 'title', spec.title, 'title', maxW);
   const sub = fieldBlock(ctx, slide, env, L, 'subtitle', spec.sub, 'body', maxW);
   const items = [{ block: title }, { block: sub, gapAbove: spec.gap || 60 }];
-  const top = stackUp(items, COVER_BOTTOM);
-  drawBlock(ctx, title, x, items[0].top, ink(slide), spec.align, alphaOf(title));
-  drawBlock(ctx, sub, x, items[1].top, ink(slide), spec.align, alphaOf(sub));
-  const overflow = (real(title) || real(sub)) && top < LOGO_SAFE;
+  const h = stackDown(items, 0);
+  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  stackDown(items, top);
+
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, spec.shadeTop, shadeStrength(slide, L), valign, top + h / 2);
+  drawLogo(ctx, env, spec.logo || LOGO_BOX, WHITE);
+  if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
+  drawBlock(ctx, title, x, items[0].top, ink(slide), align, alphaOf(title));
+  drawBlock(ctx, sub, x, items[1].top, ink(slide), align, alphaOf(sub));
+  const overflow = (real(title) || real(sub)) && (top < LOGO_SAFE || top + h > COVER_BOTTOM);
   return { overflow, photo };
 }
 
@@ -618,9 +795,12 @@ function arrowOn(slide, L) {
    логотип внизу справа. Можно добавить ещё блоки «заголовок + текст»
    (sectionCount) — они идут ниже с зазором SECTION_GAP. */
 const SECTION_GAP = 130;
+const CARD_TOP = 150;        // верх текста на белых карточках
+const CARD_BOTTOM = 1480;    // ниже — логотип в правом нижнем углу
 
 function renderInterviewCard(ctx, slide, env, L) {
   const { W, H } = L;
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, LOGO_BOX_BOTTOM, BLACK);
@@ -635,14 +815,19 @@ function renderInterviewCard(ctx, slide, env, L) {
     const titleOn = title.lines.length > 0;
     items.push({ block: title, gapAbove: gap }, { block: body, gapAbove: titleOn ? 80 : gap });
   }
-  const bottom = stackDown(items, 150);
-  for (const it of items) drawBlock(ctx, it.block, MARGIN, it.top, BLACK, 'left', alphaOf(it.block));
-  return { overflow: items.some(it => real(it.block)) && bottom > 1480, photo: null };
+  const h = stackDown(items, 0);
+  const top = placeIn(h, CARD_TOP, CARD_BOTTOM, valign, H / 2);
+  stackDown(items, top);
+  for (const it of items) drawBlock(ctx, it.block, MARGIN, it.top, BLACK, align, alphaOf(it.block));
+  const overflow = items.some(it => real(it.block)) && (top < CARD_TOP || top + h > CARD_BOTTOM);
+  return { overflow, photo: null };
 }
 
-/* Любимые места — карточка: стопка фотографий, текст по центру, стрелка. */
+/* Любимые места — карточка: стопка фотографий, под ней текст (по центру),
+   стрелка. Расположение — внутри полосы под стопкой. */
 function renderFavoriteCard(ctx, slide, env, L) {
   const { W, H } = L;
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, { x: 1198, y: 149, w: 152, h: 130 }, BLACK);
@@ -651,46 +836,47 @@ function renderFavoriteCard(ctx, slide, env, L) {
   if (arrowOn(slide, L)) drawArrow(ctx, BLACK);
   const maxW = 1253;
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
-  drawBlock(ctx, body, (W - maxW) / 2, 1268, BLACK, 'center', alphaOf(body));
+  const top = placeIn(body.height, 1268, COVER_BOTTOM, valign);
+  drawBlock(ctx, body, (W - maxW) / 2, top, BLACK, align, alphaOf(body));
   // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
-  return { overflow: real(body) && 1268 + body.height > 1700, photo };
+  return { overflow: real(body) && (top < 1268 || top + body.height > 1700), photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
-   с описанием. Всё прижато к низу (плашка заканчивается на 1650). */
+   с описанием. В макете всё прижато к низу (плашка заканчивается на 1650). */
 function renderNewPlaceCard(ctx, slide, env, L) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, 882, shadeStrength(slide, L));
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
-
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card150, 'title', COL_W);
   const addr = fieldBlock(ctx, slide, env, L, 'address', T.address50, 'body', COL_W, withEmoji('📍', true));
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', 1076);
+  // плашка: текст с полями 75 сверху и снизу
+  const plate = boxBlock(body.height + 150, body.lines.length > 0);
+  const items = [{ block: title }, { block: addr, gapAbove: 25 }, { block: plate, gapAbove: 60 }];
+  const h = stackDown(items, 0);
+  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  stackDown(items, top);
 
-  let y = COVER_BOTTOM;
-  let boxTop = y;
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
+  drawLogo(ctx, env, LOGO_BOX, WHITE);
   if (body.lines.length) {
-    const boxH = body.height + 150;
-    boxTop = COVER_BOTTOM - boxH;
+    const boxTop = items[2].top;
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
     ctx.shadowBlur = 4 * (env.k || 1);
     ctx.shadowOffsetY = 4 * (env.k || 1);
     ctx.fillStyle = paper(slide);
     ctx.globalAlpha = body.ghost ? Math.min(1, body.alpha + 0.5) : 1;
-    roundRect(ctx, MARGIN, boxTop, COL_W, boxH, 35);
+    roundRect(ctx, MARGIN, boxTop, COL_W, plate.height, 35);
     ctx.fill();
     ctx.restore();
-    drawBlock(ctx, body, 182, boxTop + 75, BLACK, 'left', alphaOf(body));
-    y = boxTop - 60;
+    drawBlock(ctx, body, 182, boxTop + 75, BLACK, align, alphaOf(body));
   }
-  const items = [{ block: title }, { block: addr, gapAbove: 25 }];
-  const top = stackUp(items, y);
-  drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), 'left', alphaOf(title));
-  drawBlock(ctx, addr, MARGIN, items[1].top, ink(slide), 'left', alphaOf(addr));
+  drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), align, alphaOf(title));
+  drawBlock(ctx, addr, MARGIN, items[1].top, ink(slide), align, alphaOf(addr));
   const any = real(title) || real(addr) || real(body);
-  return { overflow: any && Math.min(top, boxTop) < LOGO_SAFE, photo };
+  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM), photo };
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -707,39 +893,52 @@ function roundRect(ctx, x, y, w, h, r) {
 /* Мероприятия — обложка: большое число, подпись справа от него и даты. */
 function renderEventsCover(ctx, slide, env, L) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, 882, shadeStrength(slide, L));
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
-
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const num = fieldBlock(ctx, slide, env, L, 'number', T.number500, 'title', 900);
   const dates = fieldBlock(ctx, slide, env, L, 'dates', T.dates120, 'body', COL_W);
-  const labelX = num.lines.length ? MARGIN + num.width + 20 : MARGIN;
-  const label = fieldBlock(ctx, slide, env, L, 'label', T.cover150, 'title', Math.max(300, 1350 - labelX));
+  const numW = num.lines.length ? num.width + 20 : 0;
+  const label = fieldBlock(ctx, slide, env, L, 'label', T.cover150, 'title', Math.max(300, 1350 - MARGIN - numW));
 
-  // даты прижаты к низу, число и подпись — на 100 выше (низы выровнены)
-  let bottom = COVER_BOTTOM;
+  // число и подпись — один ряд (низы выровнены), под ним через 100 даты
+  const rowH = Math.max(num.height, label.height);
+  const row = boxBlock(rowH, rowH > 0);
+  const items = [{ block: row }, { block: dates, gapAbove: 100 }];
+  const h = stackDown(items, 0);
+  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  stackDown(items, top);
+
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
+  drawLogo(ctx, env, LOGO_BOX, WHITE);
   if (dates.lines.length) {
-    const datesTop = COVER_BOTTOM - dates.height;
-    drawBlock(ctx, dates, MARGIN, datesTop, ink(slide), 'left', alphaOf(dates));
-    bottom = datesTop - 100;
-    if (arrowOn(slide, L)) drawArrow(ctx, ink(slide), datesTop + dates.cap / 2);
+    // стрелка стоит справа на уровне дат — по правому краю даты заканчиваются перед ней
+    const datesW = arrowOn(slide, L) && rowAlign(align) === 'right' ? ARROW_X - 40 - MARGIN : COL_W;
+    drawBlock(ctx, dates, MARGIN, items[1].top, ink(slide), rowAlign(align), alphaOf(dates), datesW);
+    if (arrowOn(slide, L)) drawArrow(ctx, ink(slide), items[1].top + dates.cap / 2);
   } else if (arrowOn(slide, L)) {
     drawArrow(ctx, ink(slide));
   }
-  const numTop = bottom - num.height;
-  const labelTop = bottom - label.height;
-  drawBlock(ctx, num, MARGIN, numTop, ink(slide), 'left', alphaOf(num));
-  drawBlock(ctx, label, labelX, labelTop, ink(slide), 'left', alphaOf(label));
+  if (rowH > 0) {
+    const rowW = numW + label.width;
+    const a = rowAlign(align);
+    const rowX = a === 'center' ? MARGIN + (COL_W - rowW) / 2 : a === 'right' ? MARGIN + COL_W - rowW : MARGIN;
+    const rowBottom = items[0].top + rowH;
+    drawBlock(ctx, num, rowX, rowBottom - num.height, ink(slide), 'left', alphaOf(num));
+    drawBlock(ctx, label, rowX + numW, rowBottom - label.height, ink(slide), a, alphaOf(label), label.width);
+  }
   const any = real(num) || real(label) || real(dates);
-  const top = Math.min(num.lines.length ? numTop : bottom, label.lines.length ? labelTop : bottom);
   const tooWide = real(num) && num.width > 1260 - 300;
-  return { overflow: any && (top < LOGO_SAFE || tooWide), photo };
+  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM || tooWide), photo };
 }
 
 /* Мероприятия — карточка: полароид со скрепкой, справа название/дата/место,
-   снизу описание. */
+   снизу описание. В макете колонка справа — по центру полароида. */
+const POLAROID_MID = 682;      // центр полароида по высоте
+const POLAROID_BOTTOM = 1116;  // низ рамки полароида
+
 function renderEventCard(ctx, slide, env, L) {
   const { W, H } = L;
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, LOGO_BOX, BLACK);
@@ -759,145 +958,169 @@ function renderEventCard(ctx, slide, env, L) {
   // первая строка после названия всегда отстоит на 89, как дата в макете
   const firstInfo = items.slice(1).find(i => i.block.lines.length);
   if (firstInfo) firstInfo.gapAbove = 89;
-  // колонка центрируется по высоте полароида (центр ≈ 682), но не выше логотипа
-  const h = stackDown(items.map(i => Object.assign({}, i)), 0);
-  let colTop = Math.max(LOGO_SAFE, 682 - h / 2);
-  const colBottom = stackDown(items, colTop);
-  drawBlock(ctx, title, colX, items[0].top, EVENT_RED, 'left', alphaOf(title));
-  drawBlock(ctx, date, colX, items[1].top, BLACK, 'left', alphaOf(date));
-  drawBlock(ctx, place, colX, items[2].top, BLACK, 'left', alphaOf(place));
-  drawBlock(ctx, price, colX, items[3].top, BLACK, 'left', alphaOf(price));
+  // колонка: по центру полароида (не выше логотипа), сверху — под логотипом,
+  // снизу — по низу рамки
+  const h = stackDown(items, 0);
+  const colTop = placeIn(h, LOGO_SAFE, valign === 'bottom' ? POLAROID_BOTTOM : 1240, valign, POLAROID_MID);
+  stackDown(items, colTop);
+  drawBlock(ctx, title, colX, items[0].top, EVENT_RED, align, alphaOf(title), colW);
+  drawBlock(ctx, date, colX, items[1].top, BLACK, align, alphaOf(date), colW);
+  drawBlock(ctx, place, colX, items[2].top, BLACK, align, alphaOf(place), colW);
+  drawBlock(ctx, price, colX, items[3].top, BLACK, align, alphaOf(price), colW);
 
+  // описание под полароидом: сверху полосы, «снизу» — прижато к низу
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
-  drawBlock(ctx, body, 88, 1309, BLACK, 'left', alphaOf(body));
-  const colOverflow = (real(title) || real(date) || real(place) || real(price)) && colBottom > 1240;
-  const bodyOverflow = real(body) && 1309 + body.height > 1710;
+  const bodyTop = valign === 'bottom' ? 1710 - body.height : 1309;
+  drawBlock(ctx, body, 88, bodyTop, BLACK, align, alphaOf(body));
+  const colOverflow = (real(title) || real(date) || real(place) || real(price)) &&
+    (colTop < LOGO_SAFE || colTop + h > 1240);
+  const bodyOverflow = real(body) && (bodyTop < 1309 || bodyTop + body.height > 1710);
   return { overflow: colOverflow || bodyOverflow, photo };
 }
 
-/* Коммерция — карточка с фото сверху: полоса фото подстраивается под
-   объём текста (текст прижат к низу, от фото до заголовка — 126). */
+/* Коммерция — карточка с фото сверху. В макете полоса фото подстраивается
+   под объём текста (текст прижат к низу, от фото до заголовка — 126).
+   Сверху / по центру: фото как в макете (1151), текст — под ним. */
+const COM_BAND = 1151;
+
 function renderCommerceTop(ctx, slide, env, L) {
   const { W, H } = L;
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card120, 'title', COL_W);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', COL_W);
   const items = [{ block: title }, { block: body, gapAbove: 70 }];
-  let textTop = stackUp(items, COVER_BOTTOM);
-  const hasText = title.lines.length || body.lines.length;
-  let band = hasText ? textTop - 126 : 1151;
-  let overflow = false;
+  const h = stackDown(items, 0);
   const MIN = 640, MAX = 1420;
-  if (band < MIN) {
-    band = MIN;
-    stackDown(items, band + 126);
-    overflow = (real(title) || real(body)) && (items[1].top || 0) + body.height > 1720;
+  let band = COM_BAND;
+  let textTop = band + 126;
+  if (h > 0) {
+    const fits = h <= COVER_BOTTOM - (COM_BAND + 126);
+    if (valign !== 'bottom' && fits) textTop = placeIn(h, COM_BAND + 126, COVER_BOTTOM, valign);
+    else { textTop = COVER_BOTTOM - h; band = textTop - 126; }
   }
+  if (band < MIN) { band = MIN; textTop = band + 126; }
   band = Math.min(band, MAX);
+  stackDown(items, textTop);
+  const overflow = (real(title) || real(body)) && textTop + h > 1720;
   const photo = drawPhotoRect(ctx, env, 0, 0, W, band);
   drawLogo(ctx, env, LOGO_BOX, WHITE);
-  drawBlock(ctx, title, MARGIN, items[0].top, BLACK, 'left', alphaOf(title));
-  drawBlock(ctx, body, MARGIN, items[1].top, BLACK, 'left', alphaOf(body));
+  drawBlock(ctx, title, MARGIN, items[0].top, BLACK, align, alphaOf(title));
+  drawBlock(ctx, body, MARGIN, items[1].top, BLACK, align, alphaOf(body));
   return { overflow, photo };
 }
 
-/* Коммерция — карточка с фото снизу: текст сверху, под ним фото до низа. */
+/* Коммерция — карточка с фото снизу: текст сверху, под ним фото до низа
+   (в макете фото начинается на 139 ниже текста). По центру / снизу: фото
+   как в макете (с 649), текст — в полосе над ним. */
+const COM_BAND_TOP = 649;
+
 function renderCommerceBottom(ctx, slide, env, L) {
   const { W, H } = L;
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.card120, 'title', COL_W);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50, 'body', COL_W);
   const items = [{ block: title }, { block: body, gapAbove: 57 }];
-  const bottom = stackDown(items, 150);
-  const hasText = title.lines.length || body.lines.length;
-  let bandTop = hasText ? bottom + 139 : 649;
+  const h = stackDown(items, 0);
+  let bandTop = COM_BAND_TOP;
+  let textTop = CARD_TOP;
+  if (h > 0) {
+    const fits = h <= COM_BAND_TOP - 139 - CARD_TOP;
+    if (valign !== 'top' && fits) textTop = placeIn(h, CARD_TOP, COM_BAND_TOP - 139, valign);
+    else bandTop = CARD_TOP + h + 139;
+  }
+  stackDown(items, textTop);
   const MAX_TOP = 1160;
   const overflow = (real(title) || real(body)) && bandTop > MAX_TOP;
   bandTop = Math.min(Math.max(bandTop, 380), MAX_TOP);
   const photo = drawPhotoRect(ctx, env, 0, bandTop, W, H - bandTop);
   drawLogo(ctx, env, LOGO_BOX_BOTTOM, WHITE);
-  drawBlock(ctx, title, MARGIN, items[0].top, BLACK, 'left', alphaOf(title));
-  drawBlock(ctx, body, MARGIN, items[1].top, BLACK, 'left', alphaOf(body));
+  drawBlock(ctx, title, MARGIN, items[0].top, BLACK, align, alphaOf(title));
+  drawBlock(ctx, body, MARGIN, items[1].top, BLACK, align, alphaOf(body));
   return { overflow, photo };
 }
 
 /* Киноафиша — карточка фильма: кадр на весь слайд, тень, название,
-   белая плашка («Премьера: 17 сентября») и описание, всё прижато к низу. */
+   белая плашка («Премьера: 17 сентября») и описание (в макете — снизу). */
 function renderKinoCard(ctx, slide, env, L) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, 853, shadeStrength(slide, L));
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
-
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const title = fieldBlock(ctx, slide, env, L, 'title', T.kino150, 'title', COL_W);
   const badge = fieldBlock(ctx, slide, env, L, 'badge', T.body42, 'body', COL_W - 120);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body42, 'body', COL_W);
+  // плашка: поля 57 по бокам, 21 над прописными и 22 под строкой — как в макете
+  const scale = badge.size / 42;
+  const padX = 57 * scale, padTop = 21 * scale, padBottom = 22 * scale;
+  const boxH = badge.height + padTop + padBottom;
+  const boxW = badge.width + padX * 2 + 5 * scale;
+  const pill = boxBlock(boxH, badge.lines.length > 0);
+  const items = [{ block: title }, { block: pill, gapAbove: 60 }, { block: body, gapAbove: 38 }];
+  const h = stackDown(items, 0);
+  const top = placeIn(h, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  stackDown(items, top);
 
-  let y = COVER_BOTTOM;
-  let top = y;
-  if (body.lines.length) {
-    top = y - body.height;
-    drawBlock(ctx, body, MARGIN, top, ink(slide), 'left', alphaOf(body));
-    y = top - 38;
-  }
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, 853, shadeStrength(slide, L), valign, top + h / 2);
+  drawLogo(ctx, env, LOGO_BOX, WHITE);
   if (badge.lines.length) {
-    // плашка: поля 57 по бокам, 21 над прописными и 22 под строкой — как в макете
-    const scale = badge.size / 42;
-    const padX = 57 * scale, padTop = 21 * scale, padBottom = 22 * scale;
-    const boxH = badge.height + padTop + padBottom;
-    const boxW = badge.width + padX * 2 + 5 * scale;
-    const boxTop = y - boxH;
+    const a = rowAlign(align);
+    const pillX = a === 'center' ? MARGIN + (COL_W - boxW) / 2 : a === 'right' ? MARGIN + COL_W - boxW : MARGIN;
+    const boxTop = items[1].top;
     ctx.save();
     ctx.globalAlpha = badge.ghost ? Math.min(1, badge.alpha + 0.5) : 1;
     ctx.fillStyle = paper(slide);
-    roundRect(ctx, MARGIN, boxTop, boxW, boxH, boxH / 2);
+    roundRect(ctx, pillX, boxTop, boxW, boxH, boxH / 2);
     ctx.fill();
     ctx.restore();
-    drawBlock(ctx, badge, MARGIN + padX, boxTop + padTop, BLACK, 'left', alphaOf(badge));
-    top = boxTop;
-    y = boxTop - 60;
+    drawBlock(ctx, badge, pillX + padX, boxTop + padTop, BLACK, a, alphaOf(badge), badge.width);
   }
-  if (title.lines.length) {
-    top = y - title.height;
-    drawBlock(ctx, title, MARGIN, top, ink(slide), 'left', alphaOf(title));
-  }
+  drawBlock(ctx, title, MARGIN, items[0].top, ink(slide), align, alphaOf(title));
+  drawBlock(ctx, body, MARGIN, items[2].top, ink(slide), align, alphaOf(body));
   const any = real(title) || real(badge) || real(body);
-  return { overflow: any && top < LOGO_SAFE, photo };
+  return { overflow: any && (top < LOGO_SAFE || top + h > COVER_BOTTOM), photo };
 }
 
-/* Пост: заголовок крупно по центру снизу. */
+/* Пост: заголовок крупно (в макете — по центру снизу). */
 function renderPost(ctx, slide, env, L) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, 882, shadeStrength(slide, L));
-  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const maxW = 1135;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.post200, 'title', maxW);
-  const top = COVER_BOTTOM - title.height;
-  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), 'center', alphaOf(title));
-  return { overflow: real(title) && top < LOGO_SAFE, photo };
+  const top = placeIn(title.height, LOGO_SAFE, COVER_BOTTOM, valign, H / 2);
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + title.height / 2);
+  drawLogo(ctx, env, LOGO_BOX, WHITE);
+  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), align, alphaOf(title));
+  return { overflow: real(title) && (top < LOGO_SAFE || top + title.height > COVER_BOTTOM), photo };
 }
 
-/* Рилс 1080×1920: логотип и заголовок в безопасной зоне обложки. */
+/* Рилс 1080×1920: логотип и заголовок в безопасной зоне обложки
+   (по высоте 680…1493 — то, что видно в сетке профиля). */
+const REELS_TOP = 680, REELS_BOTTOM = 1493;
+
 function renderReels(ctx, slide, env, L) {
   const { W, H } = L;
-  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
-  drawShade(ctx, W, H, 830, shadeStrength(slide, L));
-  drawLogo(ctx, env, { x: 832, y: 535, w: 118, h: 100.14 }, WHITE);
+  const align = textAlign(slide, L), valign = textVAlign(slide, L);
   const maxW = 741;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.reels150, 'title', maxW);
-  const top = 1493 - title.height;
-  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), 'center', alphaOf(title));
-  return { overflow: real(title) && top < 680, photo };
+  const top = placeIn(title.height, REELS_TOP, REELS_BOTTOM, valign);
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  drawShadeFor(ctx, W, H, 830, shadeStrength(slide, L), valign, top + title.height / 2);
+  drawLogo(ctx, env, { x: 832, y: 535, w: 118, h: 100.14 }, WHITE);
+  drawBlock(ctx, title, (W - maxW) / 2, top, ink(slide), align, alphaOf(title));
+  return { overflow: real(title) && (top < REELS_TOP || top + title.height > REELS_BOTTOM), photo };
 }
 
 /*
  * Все макеты. fields — какие поля есть у слайда (порядок = порядок в форме),
  * photo — есть ли место под фото, shade — есть ли «тень» (затемнение),
  * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить),
- * sections — сколько блоков «заголовок + текст» можно добавить (см. sectionCount).
+ * sections — сколько блоков «заголовок + текст» можно добавить (см. sectionCount),
+ * align / valign — выравнивание и расположение текста в макете (их можно
+ * поменять на слайде), plain — поля без жирного/курсива (шрифт без них).
  */
 const POST = [1440, 1800];
 
@@ -905,19 +1128,20 @@ const LAYOUTS = {
   'zav-cover': {
     name: 'Заведения — обложка', short: 'Обложка', size: POST,
     fields: ['title', 'subtitle'], photo: true, shade: true,
+    align: 'center', valign: 'bottom',
     ph: { title: 'Заведения Душанбе', subtitle: 'где хочется начать вкусное утро' },
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
-      shadeTop: 1093, align: 'center', maxW: 1300, title: T.display115, sub: T.sub60 }),
+      shadeTop: 1093, maxW: 1300, title: T.display115, sub: T.sub60 }),
   },
   'int-cover': {
     name: 'Интервью — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true,
+    fields: ['title', 'subtitle'], photo: true, shade: true, align: 'left', valign: 'bottom',
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
       shadeTop: 882, title: T.cover150, sub: T.sub60 }),
   },
   'int-card': {
     name: 'Интервью — карточка', short: 'Вопрос-ответ', size: POST,
-    fields: ['title', 'body'], photo: false, sections: 4,
+    fields: ['title', 'body'], photo: false, sections: 4, align: 'left', valign: 'top',
     ph: { title: env => String(env.cardNo || 1).padStart(2, '0') + '. Заголовок',
           body: 'Текст ответа. Пустая строка — новый абзац.',
           titleN: 'Ещё заголовок', bodyN: 'Текст' },
@@ -925,82 +1149,83 @@ const LAYOUTS = {
   },
   'fav-cover': {
     name: 'Любимые места — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true, arrow: 'on',
+    fields: ['title', 'subtitle'], photo: true, shade: true, arrow: 'on', align: 'left', valign: 'bottom',
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
       shadeTop: 882, title: T.cover180, sub: T.sub80 }),
   },
   'fav-card': {
     name: 'Любимые места — карточка', short: 'Стопка фото', size: POST,
-    fields: ['body'], photo: true, arrow: 'on',
+    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top',
     ph: { body: 'Пара предложений о месте — почему его любят жители.' },
     render: renderFavoriteCard,
   },
   'new-cover': {
     name: 'Новые места — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true, arrow: 'on',
+    fields: ['title', 'subtitle'], photo: true, shade: true, arrow: 'on', align: 'left', valign: 'bottom',
     ph: { title: 'НОВЫЕ МЕСТА\nВ АСТАНЕ', subtitle: 'Смотреть' },
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
       shadeTop: 935, title: T.display115, sub: T.sub80i }),
   },
   'new-card': {
     name: 'Новые места — карточка', short: 'Заведение', size: POST,
-    fields: ['title', 'address', 'body'], photo: true, shade: true,
+    fields: ['title', 'address', 'body'], photo: true, shade: true, align: 'left', valign: 'bottom',
     ph: { title: 'Заведение', body: 'Короткое описание: что за место, чем удивит, средний чек.' },
     render: renderNewPlaceCard,
   },
   'ev-cover': {
     name: 'Мероприятия — обложка', short: 'Обложка', size: POST,
-    fields: ['number', 'label', 'dates'], photo: true, shade: true, arrow: 'on',
+    fields: ['number', 'label', 'dates'], photo: true, shade: true, arrow: 'on', align: 'left', valign: 'bottom',
     render: renderEventsCover,
   },
   'ev-card': {
     name: 'Мероприятия — карточка', short: 'Событие', size: POST,
-    fields: ['title', 'date', 'place', 'price', 'body'], photo: true,
+    fields: ['title', 'date', 'place', 'price', 'body'], photo: true, align: 'left', valign: 'middle',
     ph: { title: 'Название\nсобытия', place: 'WE Kitchen', body: 'Описание события: что, где и почему стоит сходить.' },
     render: renderEventCard,
   },
   'com-cover': {
     name: 'Коммерция — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true,
+    fields: ['title', 'subtitle'], photo: true, shade: true, align: 'left', valign: 'bottom',
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
       shadeTop: 882, title: T.cover180, sub: T.sub60 }),
   },
   'com-top': {
     name: 'Коммерция — фото сверху', short: 'Фото сверху', size: POST,
-    fields: ['title', 'body'], photo: true,
+    fields: ['title', 'body'], photo: true, align: 'left', valign: 'bottom',
     ph: { body: 'Текст карточки: пара-тройка предложений о товаре или услуге.' },
     render: renderCommerceTop,
   },
   'com-bottom': {
     name: 'Коммерция — фото снизу', short: 'Фото снизу', size: POST,
-    fields: ['title', 'body'], photo: true,
+    fields: ['title', 'body'], photo: true, align: 'left', valign: 'top',
     ph: { body: 'Текст карточки: пара-тройка предложений о товаре или услуге.' },
     render: renderCommerceBottom,
   },
   'kino-cover': {
     name: 'Киноафиша — обложка', short: 'Обложка', size: POST,
-    fields: ['title', 'subtitle'], photo: true, shade: true,
+    fields: ['title', 'subtitle'], photo: true, shade: true, align: 'center', valign: 'bottom',
+    plain: ['subtitle'],   // подзаголовок набран BravoRG — жирного/курсива у него нет
     ph: { title: 'Киноафиша Узбекистана', subtitle: 'Самые ожидаемые премьеры сентября' },
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
-      shadeTop: 882, align: 'center', maxW: 1260, gap: 35,
+      shadeTop: 882, maxW: 1260, gap: 35,
       logo: { x: 644, y: 148, w: 152, h: 130 },   // логотип по центру
       title: T.kino191, sub: T.kino103 }),
   },
   'kino-card': {
     name: 'Киноафиша — фильм', short: 'Фильм', size: POST,
-    fields: ['title', 'badge', 'body'], photo: true, shade: true,
+    fields: ['title', 'badge', 'body'], photo: true, shade: true, align: 'left', valign: 'bottom',
     ph: { title: 'Название фильма', body: 'Коротко о фильме: жанр, режиссёр, чем зацепит и для кого.' },
     render: renderKinoCard,
   },
   'post': {
     name: 'Пост', short: 'Пост', size: POST,
-    fields: ['title'], photo: true, shade: true,
+    fields: ['title'], photo: true, shade: true, align: 'center', valign: 'bottom',
     ph: { title: 'Заголовок новости крупно, в две-три строки' },
     render: renderPost,
   },
   'reels': {
     name: 'Рилс — обложка', short: 'Рилс', size: [1080, 1920],
-    fields: ['title'], photo: true, shade: true,
+    fields: ['title'], photo: true, shade: true, align: 'center', valign: 'bottom',
     ph: { title: 'Заголовок рилс в две-три строки' },
     render: renderReels,
   },

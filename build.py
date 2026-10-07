@@ -85,14 +85,14 @@ def subset_font(path: Path) -> tuple[bytes, bool]:
         return dst.read_bytes(), True
 
 
-def font_face(family: str, path: Path, italic: bool = False) -> str:
+def font_face(family: str, path: Path, italic: bool = False, weight: int = 400) -> str:
     data, woff2 = subset_font(path)
     fmt = "woff2" if woff2 else ("opentype" if path.suffix.lower() == ".otf" else "truetype")
     mime = "font/woff2" if woff2 else ("font/otf" if path.suffix.lower() == ".otf" else "font/ttf")
     b64 = base64.b64encode(data).decode("ascii")
     style = "italic" if italic else "normal"
     return (
-        f"@font-face{{font-family:'{family}';font-weight:400;font-style:{style};"
+        f"@font-face{{font-family:'{family}';font-weight:{weight};font-style:{style};"
         f"font-display:block;src:url(data:{mime};base64,{b64}) format('{fmt}')}}"
     )
 
@@ -125,6 +125,8 @@ def main() -> int:
     display = find_one(FONTS, ["display", "nauryzredkeds", "nauryz_red_keds", "nauryz"], FONT_EXT)
     body = find_one(FONTS, ["body", "inter", "inter_regular"], FONT_EXT)
     body_italic = find_one(FONTS, ["body_italic", "inter_italic"], FONT_EXT)
+    body_bold = find_one(FONTS, ["body_bold", "inter_bold"], FONT_EXT)
+    body_bold_italic = find_one(FONTS, ["body_bold_italic", "inter_bold_italic", "inter_bolditalic"], FONT_EXT)
     fb_title = find_one(FONTS, ["fallback_title"], FONT_EXT)
     fb_display = find_one(FONTS, ["fallback_display"], FONT_EXT)
 
@@ -147,6 +149,13 @@ def main() -> int:
     if body_italic:
         faces.append(font_face("G24Body", body_italic, italic=True))
         print(f"шрифт Inter Italic     {body_italic.name}")
+    # жирный и жирный курсив — для выделения в тексте (кнопка «Ж» в форме)
+    if body_bold:
+        faces.append(font_face("G24Body", body_bold, weight=700))
+        print(f"шрифт Inter Bold       {body_bold.name}")
+    if body_bold_italic:
+        faces.append(font_face("G24Body", body_bold_italic, italic=True, weight=700))
+        print(f"шрифт Inter Bold It.   {body_bold_italic.name}")
 
     # ---------- картинки бренда
     brand = {}

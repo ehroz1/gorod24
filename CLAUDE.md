@@ -97,6 +97,33 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   the blocks with `SECTION_GAP` between them. In the form each extra block
   has a remove button (later blocks shift up) and «Ещё заголовок и текст»
   adds one and focuses its title (synchronously, so iOS opens the keyboard).
+- **Alignment / vertical position** (on every layout): `slide.opts.align`
+  (`left|center|right|justify`) and `slide.opts.valign` (`top|middle|bottom`),
+  defaults per layout in `LAYOUTS` (`align`, `valign` — what the Figma frame
+  does); `textAlign()` / `textVAlign()` resolve them. Each render function
+  measures its blocks first, builds a column with `stackDown(items, 0)`
+  (height) — plates, pills and the number+label row are `boxBlock(h)`
+  pseudo-blocks — then `placeIn(h, regionTop, regionBottom, valign, center)`
+  and draws. Regions: photo covers/cards `[LOGO_SAFE, COVER_BOTTOM]` (top =
+  under the logo, middle = slide centre), white cards `[CARD_TOP,
+  CARD_BOTTOM]`, reels `[REELS_TOP, REELS_BOTTOM]`; fav-card / ev-card /
+  com-top / com-bottom place text inside their own strip (com-* keep the
+  adaptive photo band for their default valign and fall back to it when the
+  text doesn't fit the strip). `drawShadeFor()` moves the shade with the
+  text (mirrored for top, a band around the text for middle). `drawBlock(…,
+  align, alpha, boxW)` aligns inside `boxW` (default: the wrap width);
+  justify stretches spaces except on a paragraph's last line. **With
+  default opts every layout must stay pixel-identical** — render all layouts
+  before/after a change and diff (that is how this was verified).
+- **Bold / italic inside a field**: `slide.fmt[key] = [[len, flags], …]`
+  (run lengths covering the whole text; flags 1 = bold, 2 = italic) next to
+  the plain `fields[key]`. `fieldRuns()` ignores runs that don't add up to
+  the text length (stale), `fieldBlock` shifts them for `withEmoji`, and
+  `layout.plain` lists fields drawn in a font without bold/italic
+  (kino-cover subtitle is BravoRG). `textBlock(…, runs)` wraps on
+  normalized text + per-char flags and measures per style (`measureSlice`,
+  `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
+  through the single `fillText` fast path.
 - Empty fields render as **ghost placeholders** (alpha `GHOST_ALPHA`) when
   `env.ghost` is true (stage, thumbnails); export passes `ghost: false`.
   Overflow checks (`real()`) ignore ghosts.
@@ -112,7 +139,8 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 ### Fonts
 
 Families: `G24Title` (BravoRG), `G24Display` (Nauryz Red Keds), `G24Body`
-(Inter 400 normal/italic). `build.py` embeds `brand/fonts/title.*`
+(Inter 4.0: 400 and 700, normal and italic — `body*.ttf`, the 700 faces are
+for bold/italic inside fields). `build.py` embeds `brand/fonts/title.*`
 (BravoRG.otf) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
 and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 `fallback-display.ttf` (Unbounded SemiBold) only if they are missing; it emits
@@ -127,10 +155,25 @@ against the Figma screenshots and matches (line breaks differ only where
 ### `src/app.js` — UI and state
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
-  slide: `{id, layout, fields{}, opts{arrow, shade, tone, hidden{}, sections}, size{title, body},
+  slide: `{id, layout, fields{}, fmt?{key: runs}, opts{arrow, shade, tone, hidden{}, sections, align, valign}, size{title, body},
   photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
+- **Rich fields** (`FIELD_INFO[key].rich`: body, subtitle, bodyN): a
+  `contenteditable` div instead of a textarea (`buildRichField`) with
+  «Ж / К / Обычный» buttons (`execCommand` bold/italic/removeFormat; the
+  buttons cancel mousedown/pointerdown so selection stays, `editor._range`
+  restores it if focus was lost). `readRich()` serializes the DOM to
+  `{text, runs}` using **computed** font-weight/style (so `<b>`, `<strong>`,
+  styled spans from Chrome/Safari all work; `<div>`/`<br>` → `\n`).
+  Paste is intercepted: `htmlToRich()` parses clipboard HTML (tags, inline
+  styles incl. Google Docs' `<b style="font-weight:normal">` wrapper,
+  class rules from `<style>` via `CSSStyleSheet` + `matches`) and inserts
+  explicit-style spans with `insertHTML`; plain text → `insertText`.
+  `setRichField` stores text + `fmt`; `setField` (plain inputs) drops
+  stale `fmt`. Their label row is `position: sticky` so the buttons stay
+  visible above the iOS keyboard. Inside a `<div>` wrapper, not `<label>`
+  (a label would forward clicks to the first button).
 - Drafts: `localStorage['g24.drafts.v1']`, newest first, max 60,
   read-modify-write in `saveProject()` (two tabs don't clobber each other).
 - **Photos live in IndexedDB** (`g24-media`/`files`, key

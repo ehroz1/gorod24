@@ -454,6 +454,46 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .input:focus, .textarea:focus { outline: none; border-color: var(--blue); box-shadow: var(--focus); }
 .input::placeholder, .textarea::placeholder { color: var(--muted); opacity: .7; }
 
+/* поле с жирным и курсивом (contenteditable) */
+.rich {
+  position: relative; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text;
+  font-weight: 400; font-style: normal; user-select: text; -webkit-user-select: text;
+}
+.rich.big { min-height: 112px; }
+.rich b, .rich strong { font-weight: 700; }
+.rich.is-empty::before {
+  content: attr(data-placeholder); position: absolute; left: 14px; right: 14px; top: 11px;
+  color: var(--muted); opacity: .7; pointer-events: none;
+}
+/* строка с «Ж / К» прилипает к верху панели, пока поле на экране — на
+   телефоне с клавиатурой длинный текст иначе уводит кнопки из виду */
+.rich-field .field-label {
+  align-items: center; position: sticky; top: -1px; z-index: 2;
+  background: var(--surface); padding: 6px 0; margin: -6px 0 0;
+}
+.rich-field .field-hint { margin-top: -2px; }
+.fmt-tools { display: inline-flex; gap: 4px; flex: none; }
+.fmt-btn {
+  min-width: 34px; height: 30px; padding: 0 9px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+  font-size: 14px; line-height: 1; font-weight: 500;
+}
+.fmt-btn:hover { background: var(--hover); }
+.fmt-btn.fmt-bold { font-weight: 800; }
+.fmt-btn.fmt-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; }
+.fmt-btn.fmt-plain { font-size: 12.5px; color: var(--muted); }
+.fmt-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
+
+/* выравнивание и расположение текста */
+.look-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
+  flex-wrap: wrap; min-height: 44px; margin-bottom: 6px; }
+.look-row .lbl { font-weight: 600; font-size: 14.5px; }
+.look-row .seg { flex: none; }
+.look-row .seg button { flex: none; height: 34px; font-size: 13px; padding: 0 11px; }
+.seg.icons button { width: 40px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.seg.icons button svg { width: 18px; height: 18px; }
+.look-all { margin: 2px 0 10px; }
+
 .photo-row { display: flex; align-items: center; gap: 12px; }
 .photo-thumb {
   width: 64px; height: 64px; border-radius: 12px; flex: none; overflow: hidden;
