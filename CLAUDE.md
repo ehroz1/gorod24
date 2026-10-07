@@ -14,7 +14,7 @@ mobile-first. UI text, comments and README are in Russian — keep it that way.
 
 No backend, no bundler, no npm dependencies. `build.py` inlines everything
 (fonts, logo, photo-stack image, icons, JS, CSS) into one `index.html`, plus
-`manifest.webmanifest` and `service-worker.js` next to it. The one exception
+`manifest.webmanifest`, `service-worker.js` and `version.json` next to it. The one exception
 is `vendor/heic-to.js` (HEIC decoder, ~3 MB, committed as-is, not touched by
 the build), which the page loads by `<script>` only when needed.
 
@@ -27,15 +27,17 @@ python3 -m http.server 8000       # serve locally (service worker / install need
 node --check src/app.js           # quick syntax check; there is no test suite or linter
 ```
 
-**Never edit `index.html`, `manifest.webmanifest` or `service-worker.js` in the
-root** — they are generated. Edit `src/` / `brand/` and rebuild. Commit the
+**Never edit `index.html`, `manifest.webmanifest`, `service-worker.js` or
+`version.json` in the root** — they are generated. Edit `src/` / `brand/` and rebuild. Commit the
 rebuilt files together with the source change (GitHub Pages serves the root).
 
 Verification is done with Playwright against the built page (Chromium is at
 `/opt/pw-browsers` in the cloud sessions): render each layout, compare with
 Figma screenshots, drive the editor at phone sizes (`devices['iPhone 13']`,
 `'iPhone SE'`) and at 1400×900, check `pageerror`s, export a ZIP and check
-image sizes.
+image sizes. To mock `version.json` with `page.route`, create the context
+with `serviceWorkers: 'block'` — requests the service worker refetches never
+reach Playwright's router.
 
 ## Architecture
 
@@ -126,15 +128,24 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Strip layouts apply the same rule locally (com-top/com-bottom, fav-card,
   ev-card body); com-* pick a white logo over the photo band and black over
   the white part.
-- **Bold / italic inside a field**: `slide.fmt[key] = [[len, flags], …]`
-  (run lengths covering the whole text; flags 1 = bold, 2 = italic) next to
-  the plain `fields[key]`. `fieldRuns()` ignores runs that don't add up to
+- **Bold / italic / colour inside a field**: `slide.fmt[key] = [[len, flags], …]`
+  (run lengths covering the whole text; flags `BOLD` 1, `ITALIC` 2 — the
+  `STYLE_BITS` that pick a font face — plus `RED` 4 (`ACCENT_RED` #700004),
+  `CREAM` 8 (`BRAND_CREAM`) and `MARK` 16 = marker plate, text on it black)
+  next to the plain `fields[key]`. Colour/marker work in every font;
+  `fieldBlock` strips only `STYLE_BITS` for title/display fonts and
+  `layout.plain`, and sets `b.markerColor` (cream, white on brand tone).
+  `drawRichLine` lays out the pieces, draws marker plates (joined across
+  the spaces between marked words), then the text. `fieldRuns()` ignores runs that don't add up to
   the text length (stale), `fieldBlock` shifts them for `withEmoji`, and
   `layout.plain` lists fields drawn in a font without bold/italic
   (kino-cover subtitle is BravoRG). `textBlock(…, runs)` wraps on
   normalized text + per-char flags and measures per style (`measureSlice`,
   `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
   through the single `fillText` fast path.
+- `env.noText`: everything except text (blocks are still measured and
+  recorded in `res.texts`) — the background under each text, used by the
+  contrast check.
 - Empty fields render as **ghost placeholders** (alpha `GHOST_ALPHA`) when
   `env.ghost` is true (stage, thumbnails); export passes `ghost: false`.
   Overflow checks (`real()`) ignore ghosts.
@@ -159,7 +170,13 @@ and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 шрифтов макета» note and applies `FONT_STRETCH`). Users can also upload fonts
 in the app (Настройки) — stored in IndexedDB (`brand/font-title`,
 `brand/font-display`), registered as `G24TitleUser`/`G24DisplayUser`, which
-come first in `FONT_FAMILY`. With the real fonts every layout was compared
+come first in `FONT_FAMILY`; `G24Body` (Inter) comes before the generic
+family for title/display too, so letters missing from BravoRG/Nauryz fall
+back to Inter. `build.py` also emits `FONT_MISSING = {title, display, body}`
+— Cyrillic-block letters (+ ʻ ʼ ‘ ’) absent from each font's cmap
+(fontTools); `glyphIssues()` in app.js checks the rendered texts against it
+(user-uploaded fonts are not checked) and shows «Нет букв: …» under the
+stage and under the field. With the real fonts every layout was compared
 against the Figma screenshots and matches (line breaks differ only where
 `GLUE_WORDS` deliberately moves a short word to the next line).
 
@@ -167,12 +184,18 @@ against the Figma screenshots and matches (line breaks differ only where
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
   slide: `{id, layout, fields{}, fmt?{key: runs}, opts{arrow, shade, tone, hidden{}, sections, align, valign, logo}, size{title, body},
-  photo: {id, zoom, x, y, start?, end?} | null}` (`start/end` — video clip). Switching layout keeps all `fields`, so
+  photo: {id, zoom, x, y, start?, end?, adj?} | null}` (`start/end` — video clip,
+  `adj` — photo correction). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
-- **Rich fields** (`FIELD_INFO[key].rich`: body, subtitle, bodyN): a
+- **Rich fields** (`FIELD_INFO[key].rich`: `true` for body, subtitle,
+  bodyN → mode `'full'`; `'color'` for title, label and `layout.plain`
+  fields → colour and marker only, no Ж/К, ⌘B/⌘I ignored): a
   `contenteditable` div instead of a textarea (`buildRichField`) with
-  «Ж / К / Обычный» buttons (`execCommand` bold/italic/removeFormat; the
+  «Ж / К / red / cream / marker «А» / Обычный» buttons (`execCommand`
+  bold/italic, `foreColor`/`hiliteColor` with `styleWithCSS`,
+  removeFormat; colours in the editor are UI proxies `UI_RED`/`UI_CREAM`/
+  `UI_MARK`, `readRich.flagsOf` maps computed colours back to flags; the
   buttons cancel mousedown/pointerdown so selection stays, `editor._range`
   restores it if focus was lost). `readRich()` serializes the DOM to
   `{text, runs}` using **computed** font-weight/style (so `<b>`, `<strong>`,
@@ -199,7 +222,7 @@ against the Figma screenshots and matches (line breaks differ only where
   `.rich-field { scroll-margin-bottom }` on touch keeps room below a focused
   field for the popup.
 - **Edit on the preview**: `renderSlide` returns `res.texts` (`{key, x, y,
-  w, h}` per drawn field block, recorded in `drawBlock` via the module-level
+  w, h, font, size, color, ghost}` per drawn field block, recorded in `drawBlock` via the module-level
   `textHits` while rendering; `fieldBlock` tags blocks with `key`). A tap
   on the stage is resolved on **`click`** (pointerup only stores
   `stageTap`): iOS opens the keyboard / file picker only from click, and
@@ -212,6 +235,39 @@ against the Figma screenshots and matches (line breaks differ only where
   screen gets wide. Desktop: focus the field in the panel. `.text-marks`
   over the canvas shows dashed boxes for all texts in quick mode and a
   solid one for the field with the caret (`renderTextMarks`, every render).
+- **Carousel from text** (`openMagicSheet`, button `#btnMagic` on the home
+  screen only — deliberately not in the editor): pick a rubric
+  (`MAGIC_RUBRICS`), paste text (rich, so bold headings from Docs survive),
+  `parseCarouselText(text, runs, rubricId, opts)` → `{cover, items}`:
+  `magicItemsFrom` splits on numbered/bulleted/bold/«?»-question heads or
+  blank lines; the first block becomes the cover (heuristics for a short
+  title + subtitle); per rubric `RE` patterns pull 📍 addresses
+  (`looksAddress`: keyword + digit), dates, places, prices, «Премьера:»
+  badges; int numbers titles «01. …» (`opts.number`). Word boundaries are
+  `W0`/`W1` with `\p{L}` — **no `\b` (ASCII-only) and no lookbehind** (iOS
+  < 16.4 fails to parse the whole script). Live summary, optional photos →
+  `addPhotos`.
+- **Photo correction** (tab «Фото», `buildAdjustForm`): `photo.adj =
+  {bright, contrast, sat, warm}` −100…100, zeros dropped
+  (`normalizeAdj`). Applied per pixel (`adjustPixels`: brightness = gamma,
+  negative also dims highlights; contrast around 0.5; saturation via Rec.
+  709 luma, −100 = b/w; warmth = R/B gains), not `ctx.filter` (late in
+  Safari, no «warmth»). `slidePhoto()` (called from `envFor`) returns the
+  original or a cached corrected copy (`adjCache`, LRU `ADJ_CACHE_MAX`;
+  `small` = from a ≤`ADJ_SMALL` copy for thumbnails and while a slider is
+  dragged, `state.adjDrag`); `renderExport` corrects the full-size decode
+  (`adjustImage`, in `ADJ_BAND` row strips). Videos are not corrected.
+  Hold «оригинал» → `state.adjOff`. Presets `ADJ_PRESETS`.
+- **Contrast check** (`contrastIssues`, debounced from `renderStage` via
+  `scheduleContrast`): renders the slide with `noText` into a 360px
+  canvas, and for each non-ghost text in `res.texts` takes the WCAG ratio
+  between its `color` and every background pixel in its box — the
+  `CONTRAST_PART` (15 %) worst pixels decide; below `CONTRAST_MIN` /
+  `CONTRAST_MIN_SMALL` → «Текст плохо читается на фото» in the warnings.
+  Only slides with a photo. «Затемнить» (`fixContrast`, light text only)
+  raises `opts.shade` in 0.1 steps, then lowers `adj.bright` down to
+  `CONTRAST_DIM_MAX`, re-checking each step. With default opts and the
+  shade at 100 % the covers pass even on a white photo.
 - Phone layout is compacted in the `max-width: 899px` block (48px topbar,
   36px thumbnails, 36px tabs, tighter fields/sections, hints hidden,
   slide actions as an icon row); «…на всех слайдах» buttons show only when
@@ -279,6 +335,21 @@ against the Figma screenshots and matches (line breaks differ only where
   shares the already-built files. Also ZIP (store-only `buildZip`), single
   files, clipboard. File names are ASCII (`fileSlug` transliteration) —
   Chromium renames Cyrillic downloads to «download».
+- **Stories 9:16** (export sheet «Пост 4:5 / Сторис 9:16», `state.exportStory`,
+  reset each time the sheet opens): post slides (`isPostSlide`, W 1440) →
+  1080×1920, the slide rendered at 960 wide (`renderExport(…, width)`) as a
+  rounded card `STORY_CARD` over a blurred, dimmed copy of itself
+  (`storyBackdrop` = halving downscales, then stretched — no `ctx.filter`;
+  `storyBase` adds dim + card shadow). Video: `recordVideoSlide(…, story)`
+  builds the base once from the first frame and draws the slide into the
+  clipped card each frame. Reels are exported as is; files get `-story`.
+- **New version notice**: `build.py` hashes the final HTML into `BUILD_ID`
+  (placeholder replaced after the build) and writes `version.json
+  {"build"}`. The export sheet fetches it (`latestBuild`, `cache:
+  'no-store'`, no query string — the SW would cache every unique URL) and
+  shows «Доступна новая версия» → `updateApp()`: save, remember the open
+  draft in `sessionStorage` (`reopenAfterUpdate` on start), refetch the page
+  with `cache: 'reload'`, `location.reload()`.
 
 ### Mobile layout (the priority)
 
