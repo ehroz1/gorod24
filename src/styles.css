@@ -930,3 +930,18 @@ input[type=range] { width: 100%; accent-color: var(--blue); height: 28px; }
 @media (max-width: 899px) {
   .adjust-form .range-row { grid-template-columns: 112px minmax(0, 1fr) 40px; }
 }
+
+/* окно «Сохранить»: новая версия, сторис */
+.update-note {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 14px; margin-bottom: 14px;
+  border-radius: 14px; background: #FEF3BD; color: #111;
+}
+.update-note[hidden] { display: none; }
+.update-text { flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.update-text b { font-size: 15px; }
+.update-note .btn { flex: none; }
+.story-box { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.story-box[hidden] { display: none; }
+.story-box canvas { flex: none; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
+.story-box .sheet-note { margin: 0; }
+.size-row[hidden] { display: none; }

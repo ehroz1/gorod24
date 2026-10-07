@@ -103,6 +103,7 @@ const state = {
   glyphs: {},            // поле → буквы, которых нет в его шрифте (glyphIssues)
   exportFormat: 'png',
   exportWidth: 1440,
+  exportStory: false,    // окно «Сохранить»: посты сторис 9:16 (не запоминается)
   undo: [],
   redo: [],
   idbOk: true,
@@ -1003,18 +1004,32 @@ function videoExt() {
  * воспроизведения, а останавливается не раньше STOP_GRACE_MS после onstart
  * (иначе пустой файл или один кадр); всё это время рисуем последний кадр.
  */
-async function recordVideoSlide(slide, index, onProgress) {
+async function recordVideoSlide(slide, index, onProgress, story = false) {
   const m = slideMedia(slide);
   const L = layoutOf(slide);
   const v = m.prev;
   const clip = clipOf(slide, m);
-  const k = VIDEO_EXPORT_WIDTH / L.W;
+  // сторис: слайд карточкой на фоне, фон — один раз по первому кадру
+  const k = story ? STORY_CARD.w / L.W : VIDEO_EXPORT_WIDTH / L.W;
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(L.W * k);
-  canvas.height = Math.round(L.H * k);
+  canvas.width = story ? STORY_W : Math.round(L.W * k);
+  canvas.height = story ? STORY_H : Math.round(L.H * k);
   const ctx = canvas.getContext('2d');
   const env = envFor(slide, index, { ghost: false, k, photo: v });
+  let base = null;
   const draw = () => {
+    if (base) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(base, 0, 0);
+      ctx.save();
+      storyCardPath(ctx);
+      ctx.clip();
+      ctx.setTransform(k, 0, 0, k, STORY_CARD.x, STORY_CARD.y);
+      ctx.imageSmoothingQuality = 'high';
+      renderSlide(ctx, slide, env);
+      ctx.restore();
+      return;
+    }
     ctx.setTransform(k, 0, 0, k, 0, 0);
     ctx.imageSmoothingQuality = 'high';
     renderSlide(ctx, slide, env);
@@ -1022,6 +1037,19 @@ async function recordVideoSlide(slide, index, onProgress) {
 
   v.pause();
   await seekVideo(v, clip.start);
+  if (story) {
+    const small = document.createElement('canvas');
+    const sk = 288 / L.W;
+    small.width = 288;
+    small.height = Math.round(L.H * sk);
+    const sctx = small.getContext('2d');
+    sctx.setTransform(sk, 0, 0, sk, 0, 0);
+    renderSlide(sctx, slide, Object.assign({}, env, { k: sk }));
+    const back = storyBackdrop(small);
+    base = storyBase(back);
+    freeCanvas(back);
+    freeCanvas(small);
+  }
   draw();
 
   const stream = canvas.captureStream(30);
@@ -1084,6 +1112,7 @@ async function recordVideoSlide(slide, index, onProgress) {
   v.muted = true;
   stream.getTracks().forEach(t => t.stop());
   canvas.width = canvas.height = 0;
+  freeCanvas(base);
   const mime = (recorder.mimeType || type || 'video/webm').split(';')[0];
   return new Blob(chunks, { type: mime });
 }
@@ -3249,9 +3278,9 @@ function isVideoSlide(slide) {
 }
 
 /* Слайд в полном размере: фото раскодируется из оригинала только на время отрисовки. */
-async function renderExport(slide, index) {
+async function renderExport(slide, index, width = 0) {
   const L = layoutOf(slide);
-  const k = L.W === 1440 ? state.exportWidth / 1440 : 1;
+  const k = width ? width / L.W : L.W === 1440 ? state.exportWidth / 1440 : 1;
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(L.W * k);
   canvas.height = Math.round(L.H * k);
@@ -3269,8 +3298,141 @@ async function renderExport(slide, index) {
   return canvas;
 }
 
-function exportName(i, ext) {
-  return `${fileSlug(state.project.name, 'gorod24')}-${String(i + 1).padStart(2, '0')}.${ext}`;
+function exportName(i, ext, suffix = '') {
+  return `${fileSlug(state.project.name, 'gorod24')}-${String(i + 1).padStart(2, '0')}${suffix}.${ext}`;
+}
+
+/*
+ * Сторис 9:16 из поста: слайд 4:5 ложится карточкой по центру кадра
+ * 1080×1920 (поля 60, верх и низ — в безопасной зоне сторис), фон — тот же
+ * слайд, сильно размытый и притемнённый. Рилс и так 9:16 — как есть.
+ * Размытие — уменьшением ступенями и обратным растяжением: ctx.filter в
+ * Safari появился поздно.
+ */
+const STORY_W = 1080, STORY_H = 1920;
+const STORY_CARD = { x: 60, y: 360, w: 960, h: 1200, r: 28 };
+
+function isPostSlide(slide) { return layoutOf(slide).W === 1440; }
+function storyMode(slide) { return state.exportStory && isPostSlide(slide); }
+
+/* Маленькая размытая копия слайда для фона (src — canvas слайда любого размера). */
+function storyBackdrop(src) {
+  let c = src, w = src.width, h = src.height;
+  while (w > 48) {
+    w = Math.max(24, Math.round(w / 2));
+    h = Math.max(30, Math.round(h / 2));
+    const n = document.createElement('canvas');
+    n.width = w; n.height = h;
+    const x = n.getContext('2d');
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(c, 0, 0, w, h);
+    if (c !== src) freeCanvas(c);
+    c = n;
+  }
+  return c;
+}
+
+function storyCardPath(ctx) {
+  const C = STORY_CARD;
+  roundRect(ctx, C.x, C.y, C.w, C.h, C.r);
+}
+
+/* Фон сторис с тенью под карточкой; s — пикселей на единицу 1080×1920. */
+function storyBase(backdrop, s = 1) {
+  const c = document.createElement('canvas');
+  c.width = Math.round(STORY_W * s);
+  c.height = Math.round(STORY_H * s);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  // с запасом, чтобы размытые края не попадали в кадр
+  const bw = backdrop.width, bh = backdrop.height;
+  const sc = Math.max(STORY_W / bw, STORY_H / bh) * 1.12;
+  ctx.drawImage(backdrop, (STORY_W - bw * sc) / 2, (STORY_H - bh * sc) / 2, bw * sc, bh * sc);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+  ctx.fillRect(0, 0, STORY_W, STORY_H);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 70 * s;
+  ctx.shadowOffsetY = 18 * s;
+  storyCardPath(ctx);
+  ctx.fillStyle = '#000';
+  ctx.fill();
+  ctx.restore();
+  return c;
+}
+
+function composeStory(card, s = 1) {
+  const back = storyBackdrop(card);
+  const out = storyBase(back, s);
+  freeCanvas(back);
+  const ctx = out.getContext('2d');
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.save();
+  storyCardPath(ctx);
+  ctx.clip();
+  const C = STORY_CARD;
+  ctx.drawImage(card, C.x, C.y, C.w, C.h);
+  ctx.restore();
+  return out;
+}
+
+async function renderStoryExport(slide, index) {
+  const card = await renderExport(slide, index, STORY_CARD.w);
+  const out = composeStory(card);
+  freeCanvas(card);
+  return out;
+}
+
+/* Превью сторис в окне «Сохранить» (по фото из превью — быстро). */
+function storyPreview(slide, index, cssW) {
+  const card = document.createElement('canvas');
+  paintSlide(card, slide, index, cssW * STORY_CARD.w / STORY_W, { ghost: false });
+  const out = composeStory(card, cssW * Math.min(window.devicePixelRatio || 1, 2.5) / STORY_W);
+  freeCanvas(card);
+  out.style.width = cssW + 'px';
+  out.style.height = Math.round(cssW * STORY_H / STORY_W) + 'px';
+  return out;
+}
+
+/*
+ * Новая версия: build.py пишет version.json с id сборки, тот же id вшит в
+ * страницу (BUILD_ID). Окно «Сохранить» сверяет их: вкладка, открытая
+ * давно, или приложение с экрана «Домой» иначе так и живут со старой
+ * сборкой. Запрос без кеша (cache: no-store) — без ?t=…, иначе сервис-воркер
+ * копил бы в кеше по копии на каждую проверку.
+ */
+const STORE_REOPEN = 'g24.reopen.v1';
+let versionCheck = null;   // { at, build }
+
+async function latestBuild() {
+  if (!/^https?:$/.test(location.protocol) || !/^[0-9a-f]{12}$/.test(BUILD_ID)) return null;
+  if (versionCheck && Date.now() - versionCheck.at < 60000) return versionCheck.build;
+  try {
+    const r = await fetch('version.json', { cache: 'no-store' });
+    const d = await r.json();
+    versionCheck = { at: Date.now(), build: String(d && d.build || '') };
+    return versionCheck.build;
+  } catch { return null; }
+}
+
+async function updateApp() {
+  if (state.project) {
+    saveProject();
+    try { sessionStorage.setItem(STORE_REOPEN, state.project.id); } catch { /* откроют сами */ }
+  }
+  // свежая страница в HTTP-кеш и в кеш сервис-воркера, потом перезагрузка
+  try { await fetch(location.pathname, { cache: 'reload' }); } catch { /* офлайн — перезагрузится как есть */ }
+  location.reload();
+}
+
+/* После «Обновить» возвращаемся в тот же черновик. */
+function reopenAfterUpdate() {
+  let id = null;
+  try { id = sessionStorage.getItem(STORE_REOPEN); sessionStorage.removeItem(STORE_REOPEN); } catch { /* нет */ }
+  if (id && readDrafts().some(d => d.id === id)) openDraft(id);
 }
 
 /*
@@ -3292,16 +3454,18 @@ async function buildFiles(only, onProgress) {
   for (const i of idx) {
     const slide = slides[i];
     if (isVideoSlide(slide) && canRecordVideo()) {
-      const blob = await recordVideoSlide(slide, i, f => onProgress && onProgress((doneWeight + f * weight(i)) / total));
+      const story = storyMode(slide);
+      const blob = await recordVideoSlide(slide, i, f => onProgress && onProgress((doneWeight + f * weight(i)) / total), story);
       const vext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-      if (blob.size) files.push(new File([blob], exportName(i, vext), { type: blob.type }));
+      if (blob.size) files.push(new File([blob], exportName(i, vext, story ? '-story' : ''), { type: blob.type }));
       showClipStart(slide);
     } else {
       if (isVideoSlide(slide)) videoSkipped++;
-      const canvas = await renderExport(slide, i);
+      const story = storyMode(slide);
+      const canvas = story ? await renderStoryExport(slide, i) : await renderExport(slide, i);
       const blob = await canvasToBlob(canvas, mime, 0.95);
       canvas.width = canvas.height = 0;
-      if (blob) files.push(new File([blob], exportName(i, ext), { type: mime }));
+      if (blob) files.push(new File([blob], exportName(i, ext, story ? '-story' : ''), { type: mime }));
     }
     doneWeight += weight(i);
     if (onProgress) onProgress(doneWeight / total);
@@ -3398,6 +3562,30 @@ function openExportSheet() {
   const setProgress = f => { progress.hidden = false; bar.style.width = Math.round(f * 100) + '%'; };
   const list = h('div', { class: 'sheet-list' });
   const note = h('p', { class: 'sheet-note' });
+  state.exportStory = false;
+
+  // вышла новая сборка — предложить обновиться (проверка в фоне)
+  const update = h('div', { class: 'update-note', hidden: true },
+    h('span', { class: 'update-text' }, h('b', { text: 'Доступна новая версия' }),
+      h('span', { text: 'Черновик не пропадёт — откроется снова.' })),
+    btn('btn btn-primary btn-sm', 'arrow-clockwise', 'Обновить', () => updateApp()));
+  latestBuild().then(b => { if (b && b !== BUILD_ID) update.hidden = false; });
+
+  // пост или сторис 9:16 (рилс и так 9:16)
+  const posts = slides.map((sl, i) => i).filter(i => isPostSlide(slides[i]) && slideHasContent(slides[i]));
+  const storyBox = h('div', { class: 'story-box', hidden: true });
+  const syncStory = () => {
+    storyBox.hidden = !state.exportStory;
+    sizeRow.hidden = state.exportStory;
+    if (!state.exportStory || storyBox.firstChild) return;
+    const i = posts.includes(state.current) ? state.current : posts[0];
+    storyBox.append(storyPreview(slides[i], i, 96), h('p', { class: 'sheet-note',
+      text: 'Пост ляжет карточкой по центру сторис 1080×1920, фон — размытый слайд.' +
+        (posts.length < count ? ' Рилс сохранятся как есть.' : '') }));
+  };
+  const modeGroup = posts.length ? h('div', { class: 'sheet-group export-mode' },
+    segControl([['post', 'Пост 4:5'], ['story', 'Сторис 9:16']], 'post', v => { state.exportStory = v === 'story'; syncStory(); }, 'Что сохранить'),
+    storyBox) : null;
 
   const run = async (label, fn) => {
     if (exportBusy) return;
@@ -3464,7 +3652,8 @@ function openExportSheet() {
     })));
   if (!isTouch() && navigator.clipboard && window.ClipboardItem && !isVideoSlide(currentSlide())) {
     list.append(btn('btn', 'copy', 'Скопировать слайд в буфер', () => run('one', async () => {
-      const canvas = await renderExport(currentSlide(), state.current);
+      const canvas = storyMode(currentSlide()) ? await renderStoryExport(currentSlide(), state.current)
+        : await renderExport(currentSlide(), state.current);
       const blob = await canvasToBlob(canvas, 'image/png');
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       say('Слайд скопирован');
@@ -3477,13 +3666,16 @@ function openExportSheet() {
       ? `Видео (${videos}) записываются в реальном времени — около ${Math.ceil(videoSeconds)} с, 1080 px, в ${videoExt().toUpperCase()}. Не сворачивайте вкладку, пока идёт запись.` +
         (videoExt() === 'webm' ? ' Instagram не принимает WEBM — для видео лучше Safari или Chrome.' : '')
       : 'Этот браузер не умеет записывать видео — видео-слайды сохранятся картинкой. Откройте конструктор в Chrome или Safari.');
+  const sizeRow = h('div', { class: 'size-row' }, h('div', { style: 'height:10px' }),
+    segControl([[1440, '1440×1800'], [1080, '1080×1350']], state.exportWidth, v => { state.exportWidth = v; savePrefs(); scheduleRender(); }));
   const body = h('div', {},
+    update,
+    modeGroup,
     h('div', { class: 'sheet-group' }, list, progress, note, videoNote),
     h('div', { class: 'sheet-group' },
       h('h4', { text: 'Формат' }),
       segControl([['png', 'PNG'], ['jpeg', 'JPG']], state.exportFormat, v => { state.exportFormat = v; savePrefs(); }),
-      h('div', { style: 'height:10px' }),
-      segControl([[1440, '1440×1800'], [1080, '1080×1350']], state.exportWidth, v => { state.exportWidth = v; savePrefs(); scheduleRender(); }),
+      sizeRow,
       h('p', { class: 'sheet-note', text: L.W === 1080 ? 'Рилс сохраняется в 1080×1920.' : `Слайдов с содержимым: ${count}. Пустые не сохраняются.` })));
   openSheet('Сохранить', body);
 }
@@ -4247,6 +4439,7 @@ async function start() {
   openDb();
   await Promise.all([loadFonts(), loadBrand()]);
   renderHome();
+  reopenAfterUpdate();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('service-worker.js').catch(() => { /* офлайна не будет — не страшно */ });
   }
