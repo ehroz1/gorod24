@@ -574,6 +574,7 @@ function mediaSize(img) {
 function drawCover(ctx, img, x, y, w, h, t = {}) {
   const [iw, ih] = mediaSize(img);
   if (!iw || !ih) return { x: 0, y: 0, scale: 1 };
+  if (t.rot || t.tilt || t.flipH || t.flipV) return drawCoverTurned(ctx, img, iw, ih, x, y, w, h, t);
   const base = Math.max(w / iw, h / ih);
   const zoom = Math.min(Math.max(t.zoom || 1, 1), 5);
   const s = base * zoom;
@@ -582,6 +583,37 @@ function drawCover(ctx, img, x, y, w, h, t = {}) {
   const ox = Math.min(Math.max(t.x || 0, -mx), mx);
   const oy = Math.min(Math.max(t.y || 0, -my), my);
   ctx.drawImage(img, x + (w - dw) / 2 + ox, y + (h - dh) / 2 + oy, dw, dh);
+  return { x: ox, y: oy, scale: s };
+}
+
+/*
+ * То же с поворотом и отражением (вкладка «Фото»): t.rot — 0/90/180/270,
+ * t.tilt — наклон ±45°, t.flipH / t.flipV — зеркально по горизонтали /
+ * вертикали. Отражение — в осях экрана (кнопка «Зеркально» всегда
+ * отражает то, что видно), поворот — вокруг центра области. Масштаб
+ * подбирается так, чтобы повёрнутое фото закрывало область целиком, а
+ * сдвиг ограничивается в осях фото — пустых углов не бывает.
+ */
+function drawCoverTurned(ctx, img, iw, ih, x, y, w, h, t) {
+  const a = ((t.rot || 0) + (t.tilt || 0)) * Math.PI / 180;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const bw = w * Math.abs(ca) + h * Math.abs(sa);   // область в осях фото
+  const bh = w * Math.abs(sa) + h * Math.abs(ca);
+  const zoom = Math.min(Math.max(t.zoom || 1, 1), 5);
+  const s = Math.max(bw / iw, bh / ih) * zoom;
+  const mx = Math.max(0, (iw * s - bw) / 2), my = Math.max(0, (ih * s - bh) / 2);
+  const fx = t.flipH ? -1 : 1, fy = t.flipV ? -1 : 1;
+  // сдвиг экрана → оси фото (отразить, повернуть на −a), ограничить, обратно
+  const px = (t.x || 0) * fx, py = (t.y || 0) * fy;
+  const ix = Math.min(Math.max(ca * px + sa * py, -mx), mx);
+  const iy = Math.min(Math.max(-sa * px + ca * py, -my), my);
+  const ox = (ca * ix - sa * iy) * fx, oy = (sa * ix + ca * iy) * fy;
+  ctx.save();
+  ctx.translate(x + w / 2 + ox, y + h / 2 + oy);
+  ctx.scale(fx, fy);
+  ctx.rotate(a);
+  ctx.drawImage(img, -iw * s / 2, -ih * s / 2, iw * s, ih * s);
+  ctx.restore();
   return { x: ox, y: oy, scale: s };
 }
 

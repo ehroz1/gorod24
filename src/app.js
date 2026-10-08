@@ -1174,7 +1174,8 @@ function normalizeSlides(slides) {
     photo: s.photo && s.photo.id ? Object.assign({ id: String(s.photo.id), zoom: Number(s.photo.zoom) || 1,
       x: Number(s.photo.x) || 0, y: Number(s.photo.y) || 0 },
       s.photo.end > 0 ? { start: Number(s.photo.start) || 0, end: Number(s.photo.end) } : {},
-      normalizeAdj(s.photo.adj) ? { adj: normalizeAdj(s.photo.adj) } : {}) : null,
+      normalizeAdj(s.photo.adj) ? { adj: normalizeAdj(s.photo.adj) } : {},
+      normalizeTurn(s.photo)) : null,
   }));
 }
 
@@ -3197,18 +3198,73 @@ function isPhotoSlide(slide) {
   return Boolean(m && !isVideoMedia(m));
 }
 
+/*
+ * Поворот и отражение: photo.rot (0/90/180/270), photo.tilt (наклон ±45°),
+ * photo.flipH / photo.flipV. Рисует render.js (drawCoverTurned) — прямо при
+ * отрисовке, поэтому работает и для видео. Отражение — в осях экрана; при
+ * нечётном числе отражений поворот фото выглядит зеркально, поэтому
+ * «повернуть вправо» и ползунок наклона учитывают знак (turnSign).
+ */
+const TILT_MAX = 45;
+
+function normalizeTurn(ph) {
+  const out = {};
+  const rot = ((Math.round((Number(ph.rot) || 0) / 90) * 90) % 360 + 360) % 360;
+  const tilt = Math.round(clamp(Number(ph.tilt) || 0, -TILT_MAX, TILT_MAX) * 10) / 10;
+  if (rot) out.rot = rot;
+  if (tilt) out.tilt = tilt;
+  if (ph.flipH) out.flipH = true;
+  if (ph.flipV) out.flipV = true;
+  return out;
+}
+function turnSign(ph) { return (ph.flipH ? -1 : 1) * (ph.flipV ? -1 : 1); }
+function hasTurn(ph) { return Boolean(ph && (ph.rot || ph.tilt || ph.flipH || ph.flipV)); }
+
+function buildTurnSection(slide) {
+  const ph = slide.photo;
+  const act = (icon, label, fn) => btn('btn btn-outline btn-sm', icon, label, fn, label);
+  const apply = (fn, key) => {
+    pushUndo(key || null);
+    fn(ph);
+    const turn = normalizeTurn(ph);
+    for (const k of ['rot', 'tilt', 'flipH', 'flipV']) delete ph[k];
+    Object.assign(ph, turn);
+    scheduleRender();
+    scheduleSave();
+  };
+  const buttons = h('div', { class: 'turn-btns' },
+    act('arrow-counter-clockwise', '90° влево', () => { apply(p => { p.rot = (p.rot || 0) - 90 * turnSign(p); p.x = 0; p.y = 0; }); renderPanel(); }),
+    act('arrow-clockwise', '90° вправо', () => { apply(p => { p.rot = (p.rot || 0) + 90 * turnSign(p); p.x = 0; p.y = 0; }); renderPanel(); }),
+    act('swap', 'Зеркально', () => { apply(p => { p.flipH = !p.flipH; p.x = -(p.x || 0); }); renderPanel(); }),
+    act('arrow-down', 'Вверх ногами', () => { apply(p => { p.flipV = !p.flipV; p.y = -(p.y || 0); }); renderPanel(); }));
+  // наклон — как видно на экране (при отражении знак хранимого угла обратный)
+  const tilt = rangeRow('Наклон', { min: -TILT_MAX, max: TILT_MAX, step: 0.5, value: (ph.tilt || 0) * turnSign(ph), unit: '°', key: 'tilt',
+    onInput: v => apply(p => { p.tilt = v * turnSign(p); }, 'tilt:' + slide.id),
+    onChange: () => { settleFrame(); renderPanel(); } });
+  const reset = hasTurn(ph) ? btn('btn btn-ghost btn-sm', null, 'Сбросить', () => {
+    apply(p => { p.rot = 0; p.tilt = 0; p.flipH = false; p.flipV = false; });
+    renderPanel();
+  }) : null;
+  return section('Поворот и отражение', reset, buttons, h('div', { style: 'height:10px' }), tilt,
+    h('p', { class: 'field-hint', text: 'Наклон выравнивает завалившийся горизонт: фото чуть увеличится, чтобы не было пустых углов.' }));
+}
+
 function buildAdjustForm() {
   const slide = currentSlide();
   const L = layoutOf(slide);
   const m = slideMedia(slide);
   const root = h('div', { class: 'adjust-form' });
   const note = text => h('p', { class: 'field-hint', text });
-  if (!L.photo || !m || isVideoMedia(m)) {
-    root.append(section('Коррекция фото', null,
+  if (!L.photo || !m) {
+    root.append(section('Фото', null,
       note(!L.photo ? 'На этом макете нет фото — выберите слайд с фото.'
-        : !m ? 'Сначала добавьте фото — потом здесь можно поправить яркость, контраст и цвет.'
-          : 'Коррекция работает только для фото: видео экспортируется как есть.'),
-      L.photo && !m ? btn('btn btn-primary btn-sm adj-pick', 'image', 'Выбрать фото', () => pickPhotos()) : null));
+        : 'Сначала добавьте фото — потом здесь можно повернуть его и поправить яркость, контраст и цвет.'),
+      L.photo ? btn('btn btn-primary btn-sm adj-pick', 'image', 'Выбрать фото', () => pickPhotos()) : null));
+    return root;
+  }
+  root.append(buildTurnSection(slide));
+  if (isVideoMedia(m)) {
+    root.append(section('Коррекция фото', null, note('Яркость и цвет правятся только у фото: видео экспортируется как есть.')));
     return root;
   }
   const a = slide.photo.adj || {};
@@ -3890,8 +3946,8 @@ function openHelp() {
     <h4>Если текст не помещается или плохо виден</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
     <p>«Текст плохо читается на фото» — под текстом слишком светлое фото. «Затемнить» усилит затемнение, а если мало — сделает темнее само фото. «Нет букв: …» — таких букв нет в шрифте макета, на слайде они будут другим шрифтом.</p>
-    <h4>Фото: яркость и цвет</h4>
-    <p>Вкладка «Фото»: яркость, контраст, насыщенность (влево до упора — ч/б), тепло и быстрые варианты. Держите «оригинал», чтобы сравнить. Оригинал фото не меняется.</p>
+    <h4>Фото: поворот, яркость и цвет</h4>
+    <p>Вкладка «Фото»: поворот на 90°, «Зеркально», «Вверх ногами» и наклон ±45° (выровнять горизонт; работает и для видео), а также яркость, контраст, насыщенность (влево до упора — ч/б), тепло и быстрые варианты. Держите «оригинал», чтобы сравнить. Оригинал фото не меняется.</p>
     <h4>Сохранить</h4>
     <p>Кнопка «Сохранить» вверху. На телефоне — «Сохранить в Фото / отправить»: в системном окне выберите «Сохранить» или сразу Instagram/Telegram. На компьютере — ZIP или по одному файлу, PNG или JPG, 1440×1800 (как в макете) или 1080×1350.</p>
     <p>«Сторис 9:16» вверху окна — посты сохранятся кадром 1080×1920 на размытом фоне. Если вышла новая версия конструктора, там же будет «Обновить».</p>

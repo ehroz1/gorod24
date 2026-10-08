@@ -73,6 +73,16 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   black placeholder edge) → `drawCover` = object-fit: cover with
   `transform {zoom, x, y}`; `x/y` are design units from centre, clamped so no
   empty edges; the applied values are returned so the UI can store them.
+  With `rot` (0/90/180/270), `tilt` (±45°) or `flipH/flipV` it goes to
+  `drawCoverTurned`: canvas = translate(centre + offset) · scale(flip) ·
+  rotate(rot + tilt), scale chosen so the rotated image covers the slot
+  (slot extents in image axes `w|cos|+h|sin|`, `w|sin|+h|cos|`), the offset
+  is clamped in image axes and mapped back — no empty corners. Flips are in
+  screen axes, so with an odd number of flips the stored angle runs the
+  other way: the UI (`buildTurnSection`) multiplies by `turnSign()` for
+  «90° вправо» and the tilt slider. Drawn at render time, so it works for
+  video, export, stories and the contrast check alike; the old code path is
+  untouched when none of these are set (pixel-identical).
 - Decorations drawn in code, not images: background grid (`GRID`, exact line
   origins from Figma `relativeTransform`), shade gradients, arrow, polaroid
   frame, paper clip. Only `brand/photo-stack.png` and the logo are bitmaps.
@@ -184,8 +194,9 @@ against the Figma screenshots and matches (line breaks differ only where
 
 - Project: `{id, name, nameAuto, rubric, createdAt, updatedAt, slides[]}`;
   slide: `{id, layout, fields{}, fmt?{key: runs}, opts{arrow, shade, tone, hidden{}, sections, align, valign, logo}, size{title, body},
-  photo: {id, zoom, x, y, start?, end?, adj?} | null}` (`start/end` — video clip,
-  `adj` — photo correction). Switching layout keeps all `fields`, so
+  photo: {id, zoom, x, y, start?, end?, adj?, rot?, tilt?, flipH?, flipV?} | null}`
+  (`start/end` — video clip, `adj` — photo correction, `rot/tilt/flip*` —
+  rotation and mirroring). Switching layout keeps all `fields`, so
   text survives a round trip. `RUBRICS` = presets (initial slides, default
   card for «+», layouts listed first in the picker).
 - **Rich fields** (`FIELD_INFO[key].rich`: `true` for body, subtitle,
