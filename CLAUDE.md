@@ -323,7 +323,11 @@ against the Figma screenshots and matches (line breaks differ only where
   can have different clips. Stage playback (`togglePlayback`) is an rAF loop
   (~30 fps `renderStage`) that wraps `currentTime` back to `start`;
   `renderOverlay` only touches the DOM when its key changes — rebuilding the
-  play button every frame made it unclickable.
+  play button every frame made it unclickable. On an empty slot the overlay
+  shows `.photo-pills`: the «Добавить фото» pill and a black `<a>` to
+  `PICTA_URL` (icon `brand/icons/picta.svg` — a placeholder «P» mark until
+  the owner supplies the real Picta logo); stage gestures ignore
+  `closest('button, a')`.
 - **Video export** (`recordVideoSlide`): 1080-wide canvas →
   `captureStream(30)` + MediaRecorder (`RECORDER_TYPES`: MP4 first, WebM
   fallback), redrawing `renderSlide` every rAF while the clip plays. Audio via

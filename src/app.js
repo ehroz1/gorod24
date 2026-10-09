@@ -1752,6 +1752,8 @@ function renderStage() {
 }
 
 const PAN_HINT_MS = 3400;
+const PICTA_URL = 'https://picta.cc';
+
 function renderOverlay() {
   const slide = currentSlide();
   const L = layoutOf(slide);
@@ -1781,9 +1783,13 @@ function renderOverlay() {
       e.stopPropagation();
       pickPhotos();
     });
-    pill.style.left = cx + 'px';
-    pill.style.top = cy + 'px';
-    el.stageOverlay.append(pill);
+    // рядом — ссылка на Picta.cc (там можно подобрать или сделать фото)
+    const picta = h('a', { class: 'photo-pill picta-pill', href: PICTA_URL, target: '_blank', rel: 'noopener',
+      onclick: e => e.stopPropagation() }, iconSpan('picta'), document.createTextNode('Picta.cc'));
+    const pills = h('div', { class: 'photo-pills' }, pill, picta);
+    pills.style.left = cx + 'px';
+    pills.style.top = cy + 'px';
+    el.stageOverlay.append(pills);
   } else if (isVideoMedia(media.get(slide.photo.id))) {
     const m = media.get(slide.photo.id);
     const play = h('button', { type: 'button', class: 'media-pill', 'data-play-toggle': '1',
@@ -2322,7 +2328,7 @@ function settleFrame() {
 function wireStage() {
   const stage = el.stage;
   stage.addEventListener('pointerdown', e => {
-    if (e.target.closest('button')) return;
+    if (e.target.closest('button, a')) return;
     if (!state.lastRender) return;
     try { stage.setPointerCapture(e.pointerId); } catch { /* ок */ }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -2392,7 +2398,7 @@ function wireStage() {
   stage.addEventListener('click', e => {
     const t = stageTap;
     stageTap = null;
-    if (!t || Date.now() - t.at > 800 || e.target.closest('button')) return;
+    if (!t || Date.now() - t.at > 800 || e.target.closest('button, a')) return;
     // нажали на текст — правим его; мимо текста в быстрой правке — выходим
     const key = textAt(toDesign(t.x, t.y));
     if (key) { editText(key); return; }
