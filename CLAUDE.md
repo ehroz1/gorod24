@@ -325,8 +325,9 @@ against the Figma screenshots and matches (line breaks differ only where
   `renderOverlay` only touches the DOM when its key changes — rebuilding the
   play button every frame made it unclickable. On an empty slot the overlay
   shows `.photo-pills`: the «Добавить фото» pill and a black `<a>` to
-  `PICTA_URL` (icon `brand/icons/picta.svg` — a placeholder «P» mark until
-  the owner supplies the real Picta logo); stage gestures ignore
+  `PICTA_URL` (icon `brand/icons/picta.svg` = `icons/logo-p.svg` from the
+  owner's repo `ehroz1/toptop-photo`, which is picta.cc, with the fill
+  switched to `currentColor`); stage gestures ignore
   `closest('button, a')`.
 - **Video export** (`recordVideoSlide`): 1080-wide canvas →
   `captureStream(30)` + MediaRecorder (`RECORDER_TYPES`: MP4 first, WebM
