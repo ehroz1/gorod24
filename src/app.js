@@ -1398,6 +1398,114 @@ function changeLayout(layout, index = state.current) {
   commit({ structure: true });
 }
 
+/*
+ * «Перемешать»: карточкам (не обложкам и не рилс) случайно подбираются
+ * другие макеты-карточки — из тех, где поместится всё, что на карточке
+ * видно. Заголовок, текст и доп. блоки интервью (они есть только у
+ * int-card) должны быть в новом макете; короткие строки — адрес, место,
+ * дата, цена, плашка — переезжают в его строки (MIX_INFO: адрес → «место»
+ * у события, → плашка у фильма), лишь бы строк хватило. С фото — только
+ * макеты с фото; без фото — любые (слот «Добавить фото» появится сам).
+ * Соседние карточки по возможности разные, реже встречавшиеся макеты — в
+ * приоритете, текущий — в последнюю очередь. Отмена — как обычно.
+ */
+const MIX_LAYOUTS = ['int-card', 'fav-card', 'new-card', 'ev-card', 'com-top', 'com-bottom', 'kino-card'];
+const MIX_INFO = { 'new-card': ['address'], 'ev-card': ['place', 'date', 'price'], 'kino-card': ['badge'] };
+// куда может переехать строка: адрес и место — друг в друга или в плашку, дата и цена — в плашку
+const MIX_MOVES = { address: ['address', 'place', 'badge'], place: ['place', 'address', 'badge'],
+  date: ['date', 'badge'], price: ['price', 'badge'], badge: ['badge', 'date'] };
+
+/* Видимые на карточке поля: основные (заголовок, текст, блоки) и короткие строки. */
+function mixContent(slide) {
+  const cur = layoutOf(slide);
+  const info = MIX_INFO[cur.id] || [];
+  const shown = slideFields(slide, cur).filter(k => (slide.fields[k] || '').trim() && !isHidden(slide, k));
+  return { main: shown.filter(k => !info.includes(k)), info: shown.filter(k => info.includes(k)) };
+}
+
+/* Что на самом деле в строке: адрес, переехавший в плашку, остаётся адресом
+   (slide.opts.mixKind = {badge: 'address'}) — иначе дальше он ушёл бы в «дату». */
+function infoKind(slide, key) { return (slide.opts.mixKind && slide.opts.mixKind[key]) || key; }
+
+/* Куда переедут короткие строки в макете id: [[откуда, куда]] или null — не помещаются. */
+function mixInfoMoves(slide, id, info) {
+  const free = (MIX_INFO[id] || []).slice();
+  const moves = [];
+  // сначала строки, у которых есть «своё» место, потом остальные — в первую подходящую свободную
+  const own = k => free.includes(infoKind(slide, k));
+  for (const k of [...info].sort((a, b) => own(b) - own(a))) {
+    const to = MIX_MOVES[infoKind(slide, k)].find(t => free.includes(t));
+    if (!to) return null;
+    free.splice(free.indexOf(to), 1);
+    moves.push([k, to]);
+  }
+  return moves;
+}
+
+function mixFits(slide, id, content = mixContent(slide)) {
+  const L = LAYOUTS[id];
+  if (slide.photo && !L.photo) return false;
+  const keys = slideFields(Object.assign({}, slide, { layout: id }), L);
+  return content.main.every(k => keys.includes(k)) && Boolean(mixInfoMoves(slide, id, content.info));
+}
+
+/* Переносит короткие строки в строки нового макета. */
+function mixMoveInfo(slide, id, content) {
+  const moves = mixInfoMoves(slide, id, content.info) || [];
+  const values = moves.map(([from]) => [slide.fields[from], slide.fmt && slide.fmt[from], infoKind(slide, from)]);
+  const kinds = Object.assign({}, slide.opts.mixKind);
+  moves.forEach(([from]) => { delete slide.fields[from]; setFmt(slide, from, null); delete kinds[from]; });
+  moves.forEach(([, to], i) => {
+    slide.fields[to] = values[i][0];
+    if (values[i][2] !== to) kinds[to] = values[i][2];
+    if (values[i][1]) setFmt(slide, to, values[i][1]);
+    if (slide.opts.hidden && slide.opts.hidden[to]) setHiddenOn(slide, to, false);
+  });
+  if (Object.keys(kinds).length) slide.opts.mixKind = kinds;
+  else delete slide.opts.mixKind;
+}
+
+function setHiddenOn(slide, key, hidden) {
+  const map = Object.assign({}, slide.opts.hidden);
+  if (hidden) map[key] = true;
+  else delete map[key];
+  if (Object.keys(map).length) slide.opts.hidden = map;
+  else delete slide.opts.hidden;
+}
+
+function mixLayouts() {
+  const slides = state.project.slides;
+  const cards = slides.map((s, i) => i).filter(i => MIX_LAYOUTS.includes(slides[i].layout));
+  if (!cards.length) { say('Карточек нет — перемешивать нечего'); return; }
+  const used = {};
+  const plan = slides.map(s => s.layout);
+  let changed = 0;
+  for (const i of cards) {
+    const slide = slides[i];
+    const content = mixContent(slide);
+    const cands = MIX_LAYOUTS.filter(id => mixFits(slide, id, content));
+    const prev = i > 0 ? plan[i - 1] : null;
+    let pick = slide.layout;
+    if (cands.length > 1) {
+      const score = id => (used[id] || 0) * 10 + (id === prev ? 100 : 0) + (id === slide.layout ? 5 : 0) + Math.random() * 6;
+      pick = cands.reduce((best, id) => (score(id) < score(best) ? id : best));
+    }
+    used[pick] = (used[pick] || 0) + 1;
+    plan[i] = pick;
+    if (pick !== slide.layout) changed++;
+  }
+  if (!changed) { say('Этим карточкам подходит только их макет — текст и фото не влезут в другие'); return; }
+  pushUndo();
+  plan.forEach((layout, i) => {
+    const slide = slides[i];
+    if (layout === slide.layout) return;
+    mixMoveInfo(slide, layout, mixContent(slide));
+    slide.layout = layout;
+  });
+  commit({ structure: true });
+  say(`Новые макеты у ${changed} ${pluralRu(changed, 'карточки', 'карточек', 'карточек')} — нажмите ещё раз для другого варианта`, 4200);
+}
+
 function setField(key, value) {
   const slide = currentSlide();
   pushUndo('text:' + slide.id + ':' + key);
@@ -1902,6 +2010,12 @@ function renderSlidesList() {
   const add = btn('slide-add', 'plus', isWide() ? 'Слайд' : 'Слайд', () => openLayoutSheet('add'));
   add.title = 'Добавить слайд';
   frag.append(add);
+  if (p.slides.some(s => MIX_LAYOUTS.includes(s.layout))) {
+    const mix = btn('slide-add slide-mix', 'shuffle', 'Перемешать', () => mixLayouts());
+    mix.title = 'Перемешать макеты карточек';
+    mix.setAttribute('aria-label', 'Перемешать макеты карточек');
+    frag.append(mix);
+  }
   el.slidesList.replaceChildren(frag);
   invalidateThumbs();
   syncSlideSelection(true);
@@ -3938,6 +4052,7 @@ function openHelp() {
       <li>«Фото или видео» на превью или в блоке «Фото». Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.</li>
       <li>Кадр двигается пальцем (или мышью) прямо на превью, щипок или колесо — масштаб.</li>
       <li>Видео ставится в то же место, что и фото. Ползунки «Начало» и «Конец» задают фрагмент (в карусели Instagram — до 60 с), «▶» на превью проигрывает его прямо в макете.</li>
+      <li>Кнопка со стрелками в ленте рядом с «+» перемешивает макеты карточек — карусель становится разнообразнее; ещё раз — другой вариант, ⌘Z — вернуть.</li>
       <li>«+» в ленте — новый слайд любого макета, в том числе из другой рубрики. Нажмите на текущий слайд в ленте ещё раз — меню: дублировать, переставить, удалить.</li>
     </ul>
     <h4>Жирный, курсив, цвет, выравнивание</h4>

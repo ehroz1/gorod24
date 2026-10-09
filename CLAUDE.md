@@ -279,6 +279,17 @@ against the Figma screenshots and matches (line breaks differ only where
   raises `opts.shade` in 0.1 steps, then lowers `adj.bright` down to
   `CONTRAST_DIM_MAX`, re-checking each step. With default opts and the
   shade at 100 % the covers pass even on a white photo.
+- **Mix layouts** (`mixLayouts`, button `.slide-mix` after «+» in the
+  strip, shown when the project has cards): every slide whose layout is in
+  `MIX_LAYOUTS` (cards, not covers/reels) gets a random card layout that
+  `mixFits`: its visible main fields (`mixContent`: title/body/section keys
+  with text, not hidden) exist in the target, photo slides only go to photo
+  layouts, and its short info lines (`MIX_INFO` slots per layout) can move
+  per `MIX_MOVES` (address ⇄ place → badge, date/price → badge).
+  `mixMoveInfo` moves the values (and fmt) to the target keys and records
+  the original kind in `slide.opts.mixKind` so an address parked in a badge
+  never drifts into «date». Scoring: least-used layout, not the previous
+  slide's, not its current one, plus noise. One undo step.
 - Phone layout is compacted in the `max-width: 899px` block (48px topbar,
   36px thumbnails, 36px tabs, tighter fields/sections, hints hidden,
   slide actions as an icon row); «…на всех слайдах» buttons show only when
