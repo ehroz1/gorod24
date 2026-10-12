@@ -465,7 +465,7 @@ function syncFontStretch() {
 
 function missingFonts() {
   const out = [];
-  if (!BUNDLED_FONTS.title && !state.userFonts.title) out.push('BravoRG');
+  if (!BUNDLED_FONTS.title && !state.userFonts.title) out.push('Bravo Pro');
   if (!BUNDLED_FONTS.display && !state.userFonts.display) out.push('Nauryz Red Keds');
   return out;
 }
@@ -2092,12 +2092,12 @@ function syncSlideSelection(scroll) {
 /* ------------------------------------------- буквы, которых нет в шрифте */
 
 /*
- * В BravoRG нет таджикской «ҷ», в Nauryz — «ӣ ӯ ҳ ҷ» и др. (FONT_MISSING
+ * В Bravo Pro нет, например, «ӣ ӯ», в Nauryz — «ӣ ӯ ҳ ҷ» и др. (FONT_MISSING
  * считает build.py по самим шрифтам). Такие буквы рисуются Inter (см.
  * FONT_FAMILY) и выбиваются из заголовка — предупреждаем под полем и в
  * плашке под превью. Шрифт, загруженный вручную, не проверяем.
  */
-const FONT_NAMES = { title: 'BravoRG', display: 'Nauryz Red Keds', body: 'Inter' };
+const FONT_NAMES = { title: 'Bravo Pro', display: 'Nauryz Red Keds', body: 'Inter' };
 
 function glyphIssues(slide, texts) {
   const out = {};
@@ -2591,7 +2591,7 @@ function buildField(slide, key, index) {
   const label = (FIELD_LABELS[L.id] && FIELD_LABELS[L.id][base]) || info.label;
   const ph = placeholderFor(L, key, { cardNo: cardNo(index) }).replace(/\n/g, ' ');
   // full — жирный, курсив, цвет, маркер (поля Inter); color — только цвет и
-  // маркер (заголовки: у BravoRG и Nauryz нет жирного и курсива)
+  // маркер (заголовки: у Bravo Pro и Nauryz нет жирного и курсива)
   const mode = info.rich === true && !(L.plain || []).includes(base) ? 'full' : info.rich ? 'color' : null;
   if (mode) return buildRichField(slide, key, label, ph, info, mode);
   const value = slide.fields[key] || '';
@@ -3461,7 +3461,7 @@ function buildSettingsForm() {
     iconBtn('upload-simple', 'Загрузить логотип', () => pickBrandFile('logo'), 'sm'));
   const missing = missingFonts();
   root.append(section('Шрифты и логотип', null,
-    h('div', { class: 'font-status' }, fontLine('title', 'BravoRG'), fontLine('display', 'Nauryz Red Keds'), logoLine),
+    h('div', { class: 'font-status' }, fontLine('title', 'Bravo Pro'), fontLine('display', 'Nauryz Red Keds'), logoLine),
     h('p', { class: 'field-hint', style: 'margin-top:10px', text: missing.length
       ? 'Пока нет шрифта макета, слайды рисуются похожим запасным. Загруженный файл хранится только в этом браузере — чтобы шрифт был у всех, положите его в brand/fonts и пересоберите (см. README).'
       : 'Загруженные файлы хранятся только в этом браузере.' })));
@@ -4446,7 +4446,7 @@ function renderHome() {
         h('div', {}, h('b', { text: 'Нет шрифтов макета: ' + missing.join(', ') + '. ' }),
           'Пока слайды рисуются похожими запасными шрифтами. Загрузите файлы шрифтов — они сохранятся в этом браузере.'),
         h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-          missing.includes('BravoRG') ? btn('btn btn-sm btn-outline', 'upload-simple', 'BravoRG', () => pickBrandFile('title')) : null,
+          missing.includes('Bravo Pro') ? btn('btn btn-sm btn-outline', 'upload-simple', 'Bravo Pro', () => pickBrandFile('title')) : null,
           missing.includes('Nauryz Red Keds') ? btn('btn btn-sm btn-outline', 'upload-simple', 'Nauryz Red Keds', () => pickBrandFile('display')) : null)));
   }
 

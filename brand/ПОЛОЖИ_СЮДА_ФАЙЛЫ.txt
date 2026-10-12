@@ -4,7 +4,7 @@
 
 Имена важны — сборщик ищет именно их:
 
-    fonts/title.otf      шрифт заголовков — BravoRG (Regular), можно .ttf/.woff2
+    fonts/title.otf      шрифт заголовков — Bravo Pro (Regular), можно .ttf/.woff2
     fonts/display.ttf    шрифт рубрик «Заведения» и «Новые места» — Nauryz Red Keds (Bold)
     fonts/body.ttf       основной текст — Inter Regular (уже лежит)
     fonts/body-italic.ttf  Inter Italic (уже лежит, «Смотреть» на обложке «Новых мест»)

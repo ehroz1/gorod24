@@ -149,7 +149,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   the spaces between marked words), then the text. `fieldRuns()` ignores runs that don't add up to
   the text length (stale), `fieldBlock` shifts them for `withEmoji`, and
   `layout.plain` lists fields drawn in a font without bold/italic
-  (kino-cover subtitle is BravoRG). `textBlock(…, runs)` wraps on
+  (kino-cover subtitle is Bravo Pro). `textBlock(…, runs)` wraps on
   normalized text + per-char flags and measures per style (`measureSlice`,
   `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
   through the single `fillText` fast path.
@@ -165,15 +165,15 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 - Wrapping: whole words, break after hyphens (Figma does too), short
   «glue» words (`GLUE_WORDS`, ≤2 letters) stick to the next word.
 - `FONT_STRETCH`: horizontal squeeze applied when a design font is missing
-  and a fallback is used (Oswald is much wider than BravoRG), so line breaks
+  and a fallback is used (Oswald is much wider than Bravo Pro), so line breaks
   stay close to the design. `app.js` sets it; with real fonts it is 1.
 
 ### Fonts
 
-Families: `G24Title` (BravoRG), `G24Display` (Nauryz Red Keds), `G24Body`
+Families: `G24Title` (Bravo Pro), `G24Display` (Nauryz Red Keds), `G24Body`
 (Inter 4.0: 400 and 700, normal and italic — `body*.ttf`, the 700 faces are
 for bold/italic inside fields). `build.py` embeds `brand/fonts/title.*`
-(BravoRG.otf) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
+(Bravo_Pro.otf; replaced BravoRG — same metrics and advance widths, adds Ҷҷ Əə ₸) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
 and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 `fallback-display.ttf` (Unbounded SemiBold) only if they are missing; it emits
 `BUNDLED_FONTS = {title, display}` booleans (false → the app shows a «нет
@@ -181,7 +181,7 @@ and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 in the app (Настройки) — stored in IndexedDB (`brand/font-title`,
 `brand/font-display`), registered as `G24TitleUser`/`G24DisplayUser`, which
 come first in `FONT_FAMILY`; `G24Body` (Inter) comes before the generic
-family for title/display too, so letters missing from BravoRG/Nauryz fall
+family for title/display too, so letters missing from Bravo Pro/Nauryz fall
 back to Inter. `build.py` also emits `FONT_MISSING = {title, display, body}`
 — Cyrillic-block letters (+ ʻ ʼ ‘ ’) absent from each font's cmap
 (fontTools); `glyphIssues()` in app.js checks the rendered texts against it

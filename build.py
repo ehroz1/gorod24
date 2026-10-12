@@ -136,7 +136,7 @@ def main() -> int:
         return 1
 
     # ---------- шрифты
-    # Настоящие шрифты макета: title.* — BravoRG, display.* — Nauryz Red Keds.
+    # Настоящие шрифты макета: title.* — Bravo Pro, display.* — Nauryz Red Keds.
     # Если их нет, встраиваются запасные (fallback-*.ttf, свободные Google Fonts),
     # а приложение показывает подсказку, как добавить настоящие.
     faces = []
@@ -153,7 +153,7 @@ def main() -> int:
 
     font_missing = {}
     for key, family, real, fallback, label in (
-        ("title", "G24Title", title, fb_title, "BravoRG"),
+        ("title", "G24Title", title, fb_title, "Bravo Pro"),
         ("display", "G24Display", display, fb_display, "Nauryz Red Keds"),
     ):
         src = real or fallback
@@ -247,11 +247,11 @@ def main() -> int:
         (SRC / "service-worker.js").read_text(encoding="utf-8"), encoding="utf-8")
     print("готово: manifest.webmanifest, service-worker.js, version.json")
 
-    missing = [name for key, name in (("title", "BravoRG"), ("display", "Nauryz Red Keds"))
+    missing = [name for key, name in (("title", "Bravo Pro"), ("display", "Nauryz Red Keds"))
                if not bundled[key]]
     if missing:
         print("\n! нет шрифтов макета: " + ", ".join(missing))
-        print("  положи их в brand/fonts/ (title.ttf — BravoRG, display.ttf — Nauryz Red Keds)")
+        print("  положи их в brand/fonts/ (title.ttf — Bravo Pro, display.ttf — Nauryz Red Keds)")
         print("  и запусти сборку ещё раз — см. brand/ПОЛОЖИ_СЮДА_ФАЙЛЫ.txt")
     return 0
 

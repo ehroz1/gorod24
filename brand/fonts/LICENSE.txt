@@ -1,4 +1,4 @@
-title.otf          — BravoRG (Michael Chereda). Файл предоставлен владельцем
+title.otf          — Bravo Pro (Michael Chereda). Файл предоставлен владельцем
                      проекта; по данным fonts.uprock.ru распространяется
                      свободно (SIL Open Font License 1.1).
 display.ttf        — Nauryz Red Keds, © 2024 Red Keds CA, бесплатный

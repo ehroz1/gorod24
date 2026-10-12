@@ -23,18 +23,18 @@
 // см. FONT_MISSING), берутся из Inter — одинаково на любом телефоне, а не
 // системным шрифтом. Если ничего не загрузилось — системный sans-serif.
 const FONT_FAMILY = {
-  title: "'G24TitleUser', 'G24Title', 'G24Body', sans-serif",      // BravoRG
+  title: "'G24TitleUser', 'G24Title', 'G24Body', sans-serif",      // Bravo Pro
   display: "'G24DisplayUser', 'G24Display', 'G24Body', sans-serif", // Nauryz Red Keds
   body: "'G24Body', sans-serif",                        // Inter
 };
 
 // Высота прописных в долях кегля — по макету (высоты текстовых блоков
-// с text-box-trim): BravoRG 150px → 105, Nauryz 115px → 82, Inter 60px → 44.
+// с text-box-trim): Bravo Pro 150px → 105, Nauryz 115px → 82, Inter 60px → 44.
 // Реальная высота меряется в браузере (capRatio), эти числа — запас на
 // случай, если measureText не отдаёт actualBoundingBoxAscent.
 const CAP_DEFAULT = { title: 0.70, display: 0.713, body: 0.727 };
 
-// Сжатие по горизонтали для запасных шрифтов. BravoRG очень узкий, и
+// Сжатие по горизонтали для запасных шрифтов. Bravo Pro очень узкий, и
 // запасной Oswald без сжатия ломал бы строки совсем не так, как в макете.
 // Пока настоящий шрифт не добавлен, app.js ставит сюда < 1; с настоящим
 // шрифтом всегда 1.
@@ -709,7 +709,7 @@ function drawPaperClip(ctx) {
 /* ----------------------------------------------------- стили текстов */
 
 const T = {
-  // BravoRG
+  // Bravo Pro
   cover150: { font: 'title', size: 150, lead: 130, track: -3 },
   cover180: { font: 'title', size: 180, lead: 153, track: -3 },
   card150: { font: 'title', size: 150, lead: 130, track: -3 },
@@ -731,7 +731,7 @@ const T = {
   address50: { font: 'body', size: 50, track: -3 },
   dates120: { font: 'body', size: 120, track: -3 },
   // Киноафиша: кегли выведены из размеров текстовых блоков макета
-  // (высота прописных и ширина строки при BravoRG / Inter)
+  // (высота прописных и ширина строки при Bravo Pro / Inter)
   kino191: { font: 'title', size: 191, lead: 165, track: -3.8 },
   kino103: { font: 'title', size: 103, lead: 95, track: -2 },
   kino150: { font: 'title', size: 150, lead: 108, track: -3 },
@@ -820,7 +820,7 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
   const f = fieldText(slide, env, key, layout);
   let text = f.text;
   let runs = f.ghost ? null : fieldRuns(slide, key, text);
-  // жирный и курсив есть только у Inter: у заголовков (BravoRG, Nauryz) и
+  // жирный и курсив есть только у Inter: у заголовков (Bravo Pro, Nauryz) и
   // полей из layout.plain остаются цвет и маркер
   if (runs && (st.font !== 'body' || (layout.plain && layout.plain.includes(baseKey(key))))) {
     runs = runs.map(([len, fl]) => [len, fl & ~STYLE_BITS]);
@@ -1360,7 +1360,7 @@ const LAYOUTS = {
   'kino-cover': {
     name: 'Киноафиша — обложка', short: 'Обложка', size: POST,
     fields: ['title', 'subtitle'], photo: true, shade: true, align: 'center', valign: 'bottom', logo: 'tc',
-    plain: ['subtitle'],   // подзаголовок набран BravoRG — жирного/курсива у него нет
+    plain: ['subtitle'],   // подзаголовок набран Bravo Pro — жирного/курсива у него нет
     ph: { title: 'Киноафиша Узбекистана', subtitle: 'Самые ожидаемые премьеры сентября' },
     render: (ctx, s, env, L) => renderCover(ctx, s, env, L, {
       shadeTop: 882, maxW: 1260, gap: 35,
