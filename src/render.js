@@ -349,7 +349,7 @@ function recordTextHit(b, x, capTop, align, boxW, color) {
   const top = capTop - b.size * 0.12;
   const bottom = capTop + b.height + b.size * 0.24;
   textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top,
-    font: b.st.font, size: b.size, color, ghost: Boolean(b.ghost) });
+    font: b.st.font, size: b.size, lead: b.lead, group: b.group, color, ghost: Boolean(b.ghost) });
 }
 
 /* Строка по кускам: смена начертания / цвета, маркер и (при выравнивании
@@ -821,6 +821,18 @@ function sizeScale(slide, group) {
   return s ? Math.min(Math.max(s, 0.4), 1.6) : 1;
 }
 
+/* Межстрочный интервал (ползунок «Межстрочный»): множитель к интервалу
+   макета, slide.size.titleLead / bodyLead; 1 — как в макете. */
+function leadScale(slide, group) {
+  const s = slide.size && slide.size[group + 'Lead'];
+  return s ? Math.min(Math.max(s, 0.5), 2) : 1;
+}
+
+/* Стиль с изменённым межстрочным (st не трогаем — он общий). */
+function withLead(st, mul) {
+  return mul === 1 ? st : Object.assign({}, st, { lead: (st.lead || st.size * INTER_LEAD) * mul });
+}
+
 /* Блок + признак «подсказка» — чтобы рисовать бледным и не считать переполнение. */
 function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform) {
   const f = fieldText(slide, env, key, layout);
@@ -838,8 +850,9 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
     if (runs && t !== text) runs = t.endsWith(text) ? [[t.length - text.length, 0], ...runs] : null;
     text = t;
   }
-  const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
+  const b = textBlock(ctx, text, withLead(st, leadScale(slide, group)), sizeScale(slide, group), maxWidth, runs);
   b.key = key;
+  b.group = group;
   b.ghost = f.ghost;
   // маркер кремовый; если слайд уже кремовый (фирменный цвет) — белый
   b.markerColor = brandTone(slide) ? WHITE : BRAND_CREAM;
@@ -1325,7 +1338,7 @@ function renderWeather(ctx, slide, env, L) {
 
   // колонка: дата, эмодзи (центр — 257 ниже низа даты), три строки
   // (прописные первой — 122 ниже центра эмодзи, курсы ещё на 12 ниже)
-  const lead = T.wrow108.lead * sb;
+  const lead = T.wrow108.lead * sb * leadScale(slide, 'body');
   const iconC = day.height + 182 + 75 * sb;
   const rowsTop = iconC + 75 * sb + 47;
   const shift = 12 * sb;
@@ -1482,6 +1495,7 @@ const LAYOUTS = {
     name: 'Погода — сторис', short: 'Погода', size: [1080, 1920],
     fields: ['day', 'wicon', 'tMorn', 'tDay', 'tEve', 'ficon', 'curA', 'rateA', 'curB', 'rateB', 'curC', 'rateC'],
     photo: true, shade: true, shadeDefault: 0.4, valign: 'middle', fixedAlign: true,
+    sizeKeys: { body: 'tMorn' },   // «Размер текста» в пунктах — по строкам погоды, не по эмодзи
     logoFrame: { x0: 80, x1: 1000, y0: 119, y1: 1650 },
     // при создании слайда: сегодняшняя дата, эмодзи и знаки валют как в макете
     defaults: () => ({ day: ruDayMonth(), wicon: '☀️', ficon: '💵', curA: '$', curB: '€', curC: '₽' }),

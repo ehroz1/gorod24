@@ -167,6 +167,13 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   normalized text + per-char flags and measures per style (`measureSlice`,
   `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
   through the single `fillText` fast path.
+- **Size and line spacing**: `slide.size = {title, body, titleLead,
+  bodyLead}` — multipliers to the layout (`sizeScale`, `leadScale`;
+  `fieldBlock` applies the lead via `withLead`). The form shows them in
+  design points (`buildSizeRows`): `groupMetrics` renders the slide with
+  `noText` and takes `size`/`lead` of the group's main text from
+  `res.texts` (`title`/`body` key, `L.sizeKeys`, else the first field of
+  the group). Title-type rich fields have no hint line under them.
 - `env.noText`: everything except text (blocks are still measured and
   recorded in `res.texts`) — the background under each text, used by the
   contrast check.
@@ -217,7 +224,8 @@ against the Figma screenshots and matches (line breaks differ only where
   bodyN → mode `'full'`; `'color'` for title, label and `layout.plain`
   fields → colour and marker only, no Ж/К, ⌘B/⌘I ignored): a
   `contenteditable` div instead of a textarea (`buildRichField`) with
-  «Ж / К / red / cream / marker «А» / Обычный» buttons (`execCommand`
+  «Ж / К / red / cream / marker «А»» buttons — no «Обычный», a second press
+  toggles off (`execCommand`
   bold/italic, `foreColor`/`hiliteColor` with `styleWithCSS`,
   removeFormat; colours in the editor are UI proxies `UI_RED`/`UI_CREAM`/
   `UI_MARK`, `readRich.flagsOf` maps computed colours back to flags; the
@@ -235,7 +243,7 @@ against the Figma screenshots and matches (line breaks differ only where
   (a label would forward clicks to the first button).
 - **Selection popup** (touch only, `isTouch()`): the OS text-selection menu
   (Cut/Copy/Paste) can't be extended from a web page and covers the
-  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · Обычный»
+  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · colours · marker»
   bar (`.fmt-pop`, one global element) below a non-collapsed selection in a
   rich field — `POPUP_BELOW` leaves room for the selection handles; if it
   doesn't fit above the keyboard it goes `POPUP_ABOVE` the selection (over

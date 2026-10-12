@@ -1802,9 +1802,9 @@ function autoFit(index = state.current) {
     t = Math.max(FIT_MIN, Math.round((t - 0.02) * 100) / 100);
     b = Math.max(FIT_MIN, Math.round((b - 0.02) * 100) / 100);
   }
-  slide.size = { title: t, body: b };
+  slide.size = Object.assign({}, slide.size, { title: t, body: b });
   if (test(slide.size)) say('Даже мельче не помещается — сократите текст или перенесите часть на новый слайд');
-  else say('Готово: кегль ' + Math.round(b * 100) + '%');
+  else say('Готово: текст уменьшен до ' + Math.round(b * 100) + '% от макета');
   commit({ panel: true });
 }
 
@@ -2885,13 +2885,13 @@ function buildRichField(slide, key, label, ph, info, mode = 'full') {
     mode === 'full' ? fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)') : null,
     fmtButton(editor, 'red', null, 'Красный'),
     fmtButton(editor, 'cream', null, 'Кремовый'),
-    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'),
-    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать выделение'));
-  const tip = mode === 'full' ? 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' : 'Выделите слова и выберите цвет или маркер.';
+    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'));
+  // повторное нажатие на цвет / маркер / Ж / К снимает его — отдельной кнопки «Обычный» нет;
+  // у заголовков подсказки под полем нет
   return h('div', { class: 'field rich-field' },
     h('span', { class: 'field-label' }, h('span', { text: label }), tools),
     editor,
-    h('span', { class: 'field-hint', text: (info.hint ? info.hint + '. ' : '') + tip }));
+    mode === 'full' ? h('span', { class: 'field-hint', text: 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' }) : null);
 }
 
 /* Экранные цвета выделения в поле (на слайде — ACCENT_RED / BRAND_CREAM). */
@@ -3002,7 +3002,7 @@ function syncFmtStates(ed) {
 }
 
 /*
- * Всплывающая панель «Ж · К · Обычный» у выделенного текста — на телефоне.
+ * Всплывающая панель «Ж · К · цвета · маркер» у выделенного текста — на телефоне.
  * В системное меню (Вырезать / Копировать / Вставить) свои пункты не
  * добавить, а наши кнопки над полем оно закрывает. Поэтому своя панель:
  * под выделением (системное меню встаёт над ним, «ручки» — прямо под
@@ -3019,7 +3019,7 @@ const POPUP_ABOVE = 64;   // над выделением: место под си
 function buildFmtPopup() {
   fmtPopup = h('div', { class: 'fmt-pop', role: 'toolbar', 'aria-label': 'Начертание', hidden: true });
   for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['red', null, 'Красный'],
-    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер'], ['plain', 'Обычный', 'Обычный — убрать выделение']]) {
+    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер']]) {
     const b = h('button', { type: 'button', class: 'fmt-pop-btn fmt-' + cmd, text, title, 'aria-label': title,
       'aria-pressed': cmd === 'plain' ? null : 'false' });
     if (cmd === 'red' || cmd === 'cream') b.append(h('span', { class: 'fmt-dot', 'aria-hidden': 'true' }));
@@ -3209,11 +3209,8 @@ function buildSlideForm() {
   }
   if (look.length) root.append(section('Оформление', null, ...look));
 
-  // кегль
-  const groups = new Set(L.fields.map(k => FIELD_INFO[k].group));
-  const sizeRows = [];
-  if (groups.has('title')) sizeRows.push(rangeRow('Заголовок', { min: 50, max: 140, value: Math.round((slide.size.title || 1) * 100), unit: '%', key: 'size-title', onInput: x => setSize('title', x / 100) }));
-  if (groups.has('body')) sizeRows.push(rangeRow('Текст', { min: 50, max: 140, value: Math.round((slide.size.body || 1) * 100), unit: '%', key: 'size-body', onInput: x => setSize('body', x / 100) }));
+  // кегль и межстрочный — в пунктах (единицах макета)
+  const sizeRows = buildSizeRows(slide, i);
   const resetSize = btn('btn btn-ghost btn-sm', null, 'Как в макете', () => {
     pushUndo(); slide.size = {}; commit({ panel: true });
   });
@@ -3290,6 +3287,61 @@ function buildWeatherFields(slide) {
   ];
   syncChips();
   return out;
+}
+
+/*
+ * «Размер текста»: кегль и межстрочный интервал заголовка и текста — в
+ * пунктах макета (как в Figma). Хранятся множителями к макету
+ * (slide.size.title / body, titleLead / bodyLead), пункты считаем по
+ * главному полю группы: title / body или L.sizeKeys, иначе первое поле
+ * группы. Кегль и интервал берём из отрисовки (res.texts).
+ */
+const LEAD_MIN = 0.5, LEAD_MAX = 2;
+
+function groupMetrics(slide, index) {
+  const L = layoutOf(slide);
+  const c = document.createElement('canvas');
+  c.width = c.height = 4;
+  const env = { assets, photo: null, transform: {}, ghost: true, noText: true, k: 1, cardNo: index >= 0 ? cardNo(index) : 1 };
+  const texts = renderSlide(c.getContext('2d'), slide, env).texts || [];
+  const out = {};
+  for (const group of ['title', 'body']) {
+    const keys = slideFields(slide, L).filter(k => FIELD_INFO[baseKey(k)].group === group);
+    if (!keys.length) continue;
+    const main = (L.sizeKeys && L.sizeKeys[group]) || (keys.includes(group) ? group : null);
+    const t = texts.find(x => x.key === main) || keys.map(k => texts.find(x => x.key === k)).find(Boolean);
+    if (!t) continue;
+    const sc = sizeScale(slide, group), lm = leadScale(slide, group);
+    out[group] = { size: t.size / sc, lead: t.lead / (sc * lm) };
+  }
+  return out;
+}
+
+function buildSizeRows(slide, index) {
+  const m = groupMetrics(slide, index);
+  const rows = [];
+  for (const [group, title] of [['title', 'Заголовок'], ['body', 'Текст']]) {
+    const g = m[group];
+    if (!g) continue;
+    const sc = () => sizeScale(slide, group);
+    const leadPt = () => g.lead * sc() * leadScale(slide, group);
+    const leadRow = rangeRow('Интервал', { min: Math.round(g.lead * sc() * LEAD_MIN), max: Math.round(g.lead * sc() * LEAD_MAX),
+      value: Math.round(leadPt()), unit: ' пт', key: 'lead-' + group,
+      onInput: x => setSize(group + 'Lead', x / (g.lead * sc())) });
+    // кегль меняется — интервал в пунктах растёт вместе с ним (множитель тот же)
+    const syncLead = () => {
+      const input = leadRow.querySelector('input');
+      input.min = Math.round(g.lead * sc() * LEAD_MIN);
+      input.max = Math.round(g.lead * sc() * LEAD_MAX);
+      input.value = Math.round(leadPt());
+      leadRow.querySelector('output').textContent = input.value + ' пт';
+    };
+    const sizeRow = rangeRow('Кегль', { min: Math.round(g.size * 0.5), max: Math.round(g.size * 1.4),
+      value: Math.round(g.size * sc()), unit: ' пт', key: 'size-' + group,
+      onInput: x => { setSize(group, x / g.size); syncLead(); } });
+    rows.push(h('div', { class: 'size-sub', text: title }), sizeRow, leadRow);
+  }
+  return rows;
 }
 
 function buildPhotoSection(slide) {
@@ -4145,12 +4197,12 @@ function openHelp() {
     </ul>
     <h4>Жирный, курсив, цвет, выравнивание</h4>
     <ul>
-      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный), «К» (курсив) или «Обычный». На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
-      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает, «Обычный» — снимает всё.</li>
+      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный) или «К» (курсив), повторное нажатие снимает. На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
+      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает.</li>
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
       <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
-      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К · Обычный» и цвета.</li>
+      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К», цвета и маркер.</li>
     </ul>
     <h4>Если текст не помещается или плохо виден</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
