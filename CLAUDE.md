@@ -60,7 +60,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `shade`, `arrow` (`'on'` = shown by default), `ph` (placeholders; may be a
   function of `env`, used for «02. Заголовок» numbering) and `render`.
   16 layouts = every frame of the Figma page (page `277:2` plus the
-  «Киноафиша» section `304:192`). Covers share `renderCover`
+  «Киноафиша» section `304:192`), plus `weather` (see below). Covers share `renderCover`
   (bottom-anchored stack: last baseline at y=1650, `gap` — 60 by default —
   between title and subtitle; `logo` overrides the logo box, e.g. the
   centred one on the Киноафиша cover). Киноафиша was built from Figma
@@ -69,6 +69,20 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Inter 42) and match the node positions within 1px, but colours — white
   text, white pill badge with black text — are assumptions; re-check them
   against a screenshot when the quota allows.
+- **Погода — сторис** (`weather`, 1080×1920, rubric `weather`): not in
+  Figma — measured from the owner's finished stories (date Bravo Pro 168,
+  rows 108 / track 4, rates 110, logo `WEATHER_LOGO`; the overlay matched
+  within ~1px). Fields `day wicon tMorn tDay tEve ficon curA rateA curB
+  rateB curC rateC` (letter suffixes, not digits — `baseKey` strips
+  digits); the «Утром / Днем / Вечером» labels are fixed text without a key.
+  `L.defaults()` fills today's date (`ruDayMonth`), emoji and $ € ₽ in
+  `newSlide` and on `changeLayout` (`fillDefaults`, empty keys only).
+  `formatTemp` adds «+» / real minus. Shade is a flat dim
+  (`WEATHER_DIM` × `shadeStrength`, `L.shadeDefault` 0.4); `fixedAlign`
+  hides the alignment control, valign moves the whole column (default
+  middle = the stories' position). Form: `buildWeatherFields` (compact
+  grid, «Сегодня / Завтра» and emoji chips `WEATHER_ICONS` /
+  `MONEY_ICONS`); quick edit uses the generic `buildField`.
 - Photos: `drawPhotoRect` / `drawPhotoQuad` (rotated slot, `bleed` hides the
   black placeholder edge) → `drawCover` = object-fit: cover with
   `transform {zoom, x, y}`; `x/y` are design units from centre, clamped so no

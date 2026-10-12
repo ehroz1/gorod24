@@ -59,6 +59,8 @@ const RUBRICS = [
     slides: ['post'], card: 'post', layouts: ['post'] },
   { id: 'reels', name: 'Рилс', desc: 'Обложка для рилс, 1080×1920',
     slides: ['reels'], card: 'reels', layouts: ['reels'] },
+  { id: 'weather', name: 'Погода', desc: 'Сторис: погода и курсы валют, 1080×1920',
+    slides: ['weather'], card: 'weather', layouts: ['weather'] },
 ];
 const RUBRIC_BY_ID = Object.fromEntries(RUBRICS.map(r => [r.id, r]));
 
@@ -75,7 +77,23 @@ const FIELD_INFO = {
   place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
   price: { label: 'Цена', group: 'body', hint: '💵 добавится сам', optional: true },
   badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»', optional: true },
+  // погода (сторис)
+  day: { label: 'Дата', group: 'title', hint: 'ставится сама, можно поправить' },
+  wicon: { label: 'Эмодзи погоды', group: 'body' },
+  tMorn: { label: 'Утром', group: 'body', hint: '«+» добавится сам' },
+  tDay: { label: 'Днем', group: 'body', hint: '«+» добавится сам' },
+  tEve: { label: 'Вечером', group: 'body', hint: '«+» добавится сам' },
+  ficon: { label: 'Эмодзи курсов', group: 'body' },
+  curA: { label: 'Валюта, строка 1', group: 'body' },
+  rateA: { label: 'Курс, строка 1', group: 'body' },
+  curB: { label: 'Валюта, строка 2', group: 'body' },
+  rateB: { label: 'Курс, строка 2', group: 'body' },
+  curC: { label: 'Валюта, строка 3', group: 'body' },
+  rateC: { label: 'Курс, строка 3', group: 'body' },
 };
+// быстрый выбор эмодзи в форме погоды
+const WEATHER_ICONS = ['☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '🌫️', '💨', '🌈'];
+const MONEY_ICONS = ['💵', '💰', '💸', '💶', '💱', '🏦'];
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
   'new-card': { title: 'Название заведения', body: 'Описание (белая плашка)' },
@@ -1125,7 +1143,17 @@ async function recordVideoSlide(slide, index, onProgress, story = false) {
 /* ------------------------------------------------------------- проекты */
 
 function newSlide(layout) {
-  return { id: newId(), layout, fields: {}, opts: {}, size: {}, photo: null };
+  const L = LAYOUTS[layout];
+  return { id: newId(), layout, fields: L && L.defaults ? L.defaults() : {}, opts: {}, size: {}, photo: null };
+}
+
+/* Перешли на макет со значениями по умолчанию (погода) — заполняем пустые поля. */
+function fillDefaults(slide) {
+  const L = layoutOf(slide);
+  if (!L.defaults) return;
+  for (const [key, value] of Object.entries(L.defaults())) {
+    if (!(slide.fields[key] || '').trim()) slide.fields[key] = value;
+  }
 }
 
 function currentSlide() {
@@ -1394,6 +1422,7 @@ function changeLayout(layout, index = state.current) {
   if (slide.layout === layout) return;
   pushUndo();
   slide.layout = layout;
+  fillDefaults(slide);
   if (!LAYOUTS[layout].photo) { /* фото остаётся в данных — вернётся при смене обратно */ }
   commit({ structure: true });
 }
@@ -3115,7 +3144,8 @@ function buildSlideForm() {
 
   // тексты
   const fields = h('div', { class: 'section' });
-  for (const key of L.fields) fields.append(buildField(slide, key, i));
+  if (L.id === 'weather') fields.append(...buildWeatherFields(slide));
+  else for (const key of L.fields) fields.append(buildField(slide, key, i));
   // доп. блоки «заголовок + текст» (карточка интервью)
   if (L.sections > 1) {
     const n = sectionCount(slide, L);
@@ -3140,7 +3170,7 @@ function buildSlideForm() {
   const look = [];
   // выравнивание и расположение текста (по умолчанию — как в макете)
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
-  look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
+  if (!L.fixedAlign) look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
     segControl([['left', 'По левому краю', 'text-align-left'], ['center', 'По центру', 'text-align-center'],
       ['right', 'По правому краю', 'text-align-right'], ['justify', 'По ширине', 'text-align-justify']],
     align, v => setTextLayout('align', v), 'Выравнивание текста')));
@@ -3202,6 +3232,64 @@ function buildSlideForm() {
     act('btn btn-danger', 'trash', 'Удалить слайд', () => deleteSlide()))));
 
   return root;
+}
+
+/*
+ * Форма погоды (сторис): дата с «Сегодня / Завтра», эмодзи с быстрым
+ * выбором, температура «Утром / Днем / Вечером» и курсы — знак валюты +
+ * число. Подписи «Утром…» на слайде не меняются. Поля — обычные
+ * (slide.fields), так что быстрая правка с превью работает как везде.
+ */
+function buildWeatherFields(slide) {
+  const L = layoutOf(slide);
+  const input = (key, cls = '') => {
+    const c = h('input', { class: 'input ' + cls, type: 'text', placeholder: placeholderFor(L, key),
+      enterkeyhint: 'done', autocomplete: 'off', 'aria-label': FIELD_INFO[key].label });
+    c.value = slide.fields[key] || '';
+    c.dataset.field = key;
+    c.addEventListener('input', () => { setField(key, c.value); syncChips(); });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter') c.blur(); });
+    return c;
+  };
+  const chipSets = [];
+  const syncChips = () => chipSets.forEach(([key, list]) =>
+    list.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.value === (slide.fields[key] || '').trim())));
+  // кнопки-варианты: нажали — значение в поле и на слайд
+  const chips = (key, control, options, cls = '') => {
+    const list = h('div', { class: 'chips ' + cls });
+    for (const [label, value] of options) {
+      const b = h('button', { type: 'button', class: 'chip-btn', text: label });
+      b.dataset.value = value;
+      b.addEventListener('click', () => { control.value = value; setField(key, value); syncChips(); });
+      list.append(b);
+    }
+    chipSets.push([key, list]);
+    return list;
+  };
+  const tomorrow = new Date(Date.now() + 864e5);
+  const day = input('day');
+  const wicon = input('wicon', 'wx-emoji');
+  const ficon = input('ficon', 'wx-emoji');
+  const out = [
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Дата' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.day.hint })),
+      day,
+      chips('day', day, [['Сегодня', ruDayMonth()], ['Завтра', ruDayMonth(tomorrow)]])),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Погода' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.tMorn.hint })),
+      h('div', { class: 'wx-pick' }, wicon, chips('wicon', wicon, WEATHER_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid' }, WEATHER_ROWS.map(([key, label]) =>
+        [h('span', { class: 'wx-lbl', text: label }), input(key)]).flat())),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Курсы валют' })),
+      h('div', { class: 'wx-pick' }, ficon, chips('ficon', ficon, MONEY_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid wx-rates' }, WEATHER_RATES.map(([cur, rate]) =>
+        [input(cur, 'wx-cur'), input(rate)]).flat())),
+  ];
+  syncChips();
+  return out;
 }
 
 function buildPhotoSection(slide) {
