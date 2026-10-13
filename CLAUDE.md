@@ -213,7 +213,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 Families: `G24Title` (Bravo Pro), `G24Display` (Nauryz Red Keds), `G24Body`
 (Inter 4.0: 400 and 700, normal and italic — `body*.ttf`, the 700 faces are
 for bold/italic inside fields). `build.py` embeds `brand/fonts/title.*`
-(Bravo_Pro.otf; replaced BravoRG — same metrics and advance widths, adds Ҷҷ Əə ₸) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
+(Bravo Pro 1.101 — replaced BravoRG, same metrics and advance widths, adds Ҷҷ Əə ₸; 1.101 only fixes the orientation of the schwa glyphs Ә ә Ə ə) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
 and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 `fallback-display.ttf` (Unbounded SemiBold) only if they are missing; it emits
 `BUNDLED_FONTS = {title, display}` booleans (false → the app shows a «нет
