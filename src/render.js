@@ -349,7 +349,7 @@ function recordTextHit(b, x, capTop, align, boxW, color) {
   const top = capTop - b.size * 0.12;
   const bottom = capTop + b.height + b.size * 0.24;
   textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top,
-    font: b.st.font, size: b.size, color, ghost: Boolean(b.ghost) });
+    font: b.st.font, size: b.size, lead: b.lead, group: b.group, color, ghost: Boolean(b.ghost) });
 }
 
 /* Строка по кускам: смена начертания / цвета, маркер и (при выравнивании
@@ -808,6 +808,12 @@ const T = {
   kino103: { font: 'title', size: 103, lead: 95, track: -2 },
   kino150: { font: 'title', size: 150, lead: 108, track: -3 },
   body42: { font: 'body', size: 42, track: -2.1 },
+  // Погода (сторис): сняты с готовых сторис 1080×1920 (высота прописных и
+  // ширина строк при Bravo Pro)
+  wday168: { font: 'title', size: 168, lead: 150, track: 0 },
+  wrow108: { font: 'title', size: 108, lead: 121, track: 4 },
+  wrate110: { font: 'title', size: 110, lead: 121, track: 0 },
+  wicon150: { font: 'body', size: 150 },
 };
 
 /* ------------------------------------------------------- поля слайда */
@@ -887,6 +893,18 @@ function sizeScale(slide, group) {
   return s ? Math.min(Math.max(s, 0.4), 1.6) : 1;
 }
 
+/* Межстрочный интервал (ползунок «Межстрочный»): множитель к интервалу
+   макета, slide.size.titleLead / bodyLead; 1 — как в макете. */
+function leadScale(slide, group) {
+  const s = slide.size && slide.size[group + 'Lead'];
+  return s ? Math.min(Math.max(s, 0.5), 2) : 1;
+}
+
+/* Стиль с изменённым межстрочным (st не трогаем — он общий). */
+function withLead(st, mul) {
+  return mul === 1 ? st : Object.assign({}, st, { lead: (st.lead || st.size * INTER_LEAD) * mul });
+}
+
 /* Блок + признак «подсказка» — чтобы рисовать бледным и не считать переполнение. */
 function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform) {
   const f = fieldText(slide, env, key, layout);
@@ -904,8 +922,9 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
     if (runs && t !== text) runs = t.endsWith(text) ? [[t.length - text.length, 0], ...runs] : null;
     text = t;
   }
-  const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
+  const b = textBlock(ctx, text, withLead(st, leadScale(slide, group)), sizeScale(slide, group), maxWidth, runs);
   b.key = key;
+  b.group = group;
   b.ghost = f.ghost;
   // маркер кремовый; если слайд уже кремовый (фирменный цвет) — белый
   b.markerColor = brandTone(slide) ? WHITE : BRAND_CREAM;
@@ -990,7 +1009,8 @@ function renderCover(ctx, slide, env, L, spec) {
 
 function shadeStrength(slide, L) {
   if (!L.shade) return 0;
-  const v = slide.opts && typeof slide.opts.shade === 'number' ? slide.opts.shade : 1;
+  const v = slide.opts && typeof slide.opts.shade === 'number' ? slide.opts.shade
+    : typeof L.shadeDefault === 'number' ? L.shadeDefault : 1;
   return Math.min(Math.max(v, 0), 1);
 }
 
@@ -1341,6 +1361,91 @@ function renderReels(ctx, slide, env, L) {
 }
 
 /*
+ * Погода — сторис 1080×1920: дата, под ней две колонки — эмодзи погоды и
+ * «Утром / Днем / Вечером» с температурой, эмодзи денег и курсы валют.
+ * Подписи «Утром…» не редактируются; меняются дата, эмодзи, температура,
+ * знаки валют и курсы. Координаты — с готовых сторис (по центру слайда:
+ * верх даты 575, низ курсов 1402). Затемнение — ровное по всему фото.
+ */
+const WEATHER_ROWS = [['tMorn', 'Утром'], ['tDay', 'Днем'], ['tEve', 'Вечером']];
+const WEATHER_RATES = [['curA', 'rateA'], ['curB', 'rateB'], ['curC', 'rateC']];
+const WEATHER_LOGO = { x: 848, y: 119, w: 152, h: 130 };
+const WEATHER_DIM = 0.6;   // затемнение при 100 %
+
+/* Дата для сторис: «12 октября». */
+function ruDayMonth(d = new Date()) {
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+/* Температура: «12» → «+12», «-3» → «−3» (настоящий минус); с градусом,
+   словами и т. п. — как набрано. */
+function formatTemp(text) {
+  const t = text.trim();
+  const m = t.match(/^([+\-−–]?)\s*(\d+(?:[.,]\d+)?)$/);
+  if (!m) return text;
+  if (/^0+(?:[.,]0+)?$/.test(m[2])) return m[2];
+  return (m[1] && m[1] !== '+' ? '−' : '+') + m[2];
+}
+
+function renderWeather(ctx, slide, env, L) {
+  const { W, H } = L;
+  const valign = textVAlign(slide, L);
+  const sb = sizeScale(slide, 'body');
+  const day = fieldBlock(ctx, slide, env, L, 'day', T.wday168, 'title', 980);
+  const wicon = fieldBlock(ctx, slide, env, L, 'wicon', T.wicon150, 'body', 400);
+  const ficon = fieldBlock(ctx, slide, env, L, 'ficon', T.wicon150, 'body', 400);
+  const labels = WEATHER_ROWS.map(([, text]) => textBlock(ctx, text, T.wrow108, sb));
+  const space = (() => {
+    const b = labels[0];
+    ctx.save(); ctx.font = b.font; setTracking(ctx, b.track);
+    const w = measureTracked(ctx, ' ', b.track, b.stretch);
+    ctx.restore();
+    return w;
+  })();
+  const LEFT = 97, SYM_X = 637, SYM_W = 100, RATE_X = 762;
+  const temps = WEATHER_ROWS.map(([key], i) =>
+    fieldBlock(ctx, slide, env, L, key, T.wrow108, 'body', Math.max(60, 600 - labels[i].lines[0].width - space), formatTemp));
+  const syms = WEATHER_RATES.map(([key]) => fieldBlock(ctx, slide, env, L, key, T.wrate110, 'body', 200));
+  const rates = WEATHER_RATES.map(([, key]) => fieldBlock(ctx, slide, env, L, key, T.wrate110, 'body', W - RATE_X - 40));
+
+  // колонка: дата, эмодзи (центр — 257 ниже низа даты), три строки
+  // (прописные первой — 122 ниже центра эмодзи, курсы ещё на 12 ниже)
+  const lead = T.wrow108.lead * sb * leadScale(slide, 'body');
+  const iconC = day.height + 182 + 75 * sb;
+  const rowsTop = iconC + 75 * sb + 47;
+  const shift = 12 * sb;
+  const rowH = i => Math.max(temps[i].height, labels[i].height);
+  const h = rowsTop + 2 * lead + shift + Math.max(rowH(2), ...[syms[2], rates[2]].map(b => b.height));
+  const row = logoSpot(slide, L)[0];
+  const rTop = row === 't' ? 330 : 150, rBottom = row === 'b' ? 1500 : 1650;
+  // по умолчанию (по центру) — как в макете: середина колонки на 988
+  const top = placeIn(h, rTop, rBottom, valign, 575 + 827 / 2);
+
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  const dim = shadeStrength(slide, L) * WEATHER_DIM;
+  if (dim > 0) { ctx.fillStyle = `rgba(0, 0, 0, ${dim})`; ctx.fillRect(0, 0, W, H); }
+  drawLogo(ctx, env, logoBox(slide, L, WEATHER_LOGO), WHITE);
+
+  const color = ink(slide);
+  drawBlock(ctx, day, (W - 980) / 2, top, color, 'center', alphaOf(day));
+  // эмодзи: середина картинки ≈ на 0,35 кегля выше базовой линии
+  const iconTop = b => top + iconC + 0.35 * b.size - b.cap;
+  drawBlock(ctx, wicon, 216 - 200, iconTop(wicon), color, 'center', alphaOf(wicon));
+  drawBlock(ctx, ficon, 838 - 200, iconTop(ficon), color, 'center', alphaOf(ficon));
+  WEATHER_ROWS.forEach((_, i) => {
+    const y = top + rowsTop + i * lead;
+    drawBlock(ctx, labels[i], LEFT, y, color);
+    drawBlock(ctx, temps[i], LEFT + labels[i].lines[0].width + space, y, color, 'left', alphaOf(temps[i]));
+    drawBlock(ctx, syms[i], SYM_X, y + shift, color, 'center', alphaOf(syms[i]), SYM_W);
+    drawBlock(ctx, rates[i], RATE_X, y + shift, color, 'left', alphaOf(rates[i]));
+  });
+  const blocks = [day, wicon, ficon, ...temps, ...syms, ...rates];
+  const wide = [...temps, ...rates].some(b => real(b) && b.lines.length > 1) || (real(day) && day.lines.length > 1);
+  const overflow = blocks.some(real) && (wide || top < rTop || top + h > rBottom);
+  return { overflow, photo };
+}
+
+/*
  * Все макеты. fields — какие поля есть у слайда (порядок = порядок в форме),
  * photo — есть ли место под фото, shade — есть ли «тень» (затемнение),
  * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить),
@@ -1457,6 +1562,18 @@ const LAYOUTS = {
     logoFrame: { x0: 130, x1: 950, y0: REELS_SAFE_TOP, y1: REELS_BOTTOM },
     ph: { title: 'Заголовок рилс в две-три строки' },
     render: renderReels,
+  },
+  'weather': {
+    name: 'Погода — сторис', short: 'Погода', size: [1080, 1920],
+    fields: ['day', 'wicon', 'tMorn', 'tDay', 'tEve', 'ficon', 'curA', 'rateA', 'curB', 'rateB', 'curC', 'rateC'],
+    photo: true, shade: true, shadeDefault: 0.4, valign: 'middle', fixedAlign: true,
+    sizeKeys: { body: 'tMorn' },   // «Размер текста» в пунктах — по строкам погоды, не по эмодзи
+    logoFrame: { x0: 80, x1: 1000, y0: 119, y1: 1650 },
+    // при создании слайда: сегодняшняя дата, эмодзи и знаки валют как в макете
+    defaults: () => ({ day: ruDayMonth(), wicon: '☀️', ficon: '💵', curA: '$', curB: '€', curC: '₽' }),
+    ph: { day: () => ruDayMonth(), wicon: '☀️', ficon: '💵', tMorn: '+12', tDay: '+18', tEve: '+14',
+          curA: '$', curB: '€', curC: '₽', rateA: '87,45', rateB: '102,16', rateC: '1,046' },
+    render: renderWeather,
   },
 };
 

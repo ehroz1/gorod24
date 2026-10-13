@@ -286,6 +286,18 @@ span[data-icon] svg { width: 100%; height: 100%; }
 }
 .chip-btn.on { background: var(--text); color: var(--surface); border-color: var(--text); }
 .magic-hint { margin-top: 8px; }
+/* форма погоды */
+.wx-pick { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.wx-pick .wx-emoji { width: 58px; flex: none; text-align: center; font-size: 20px; padding-left: 4px; padding-right: 4px; }
+.wx-emojis { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+.wx-emojis::-webkit-scrollbar { display: none; }
+.wx-emojis .chip-btn { flex: none; padding: 0 8px; font-size: 19px; }
+.wx-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin-top: 4px; }
+.wx-rates { grid-template-columns: 58px 1fr; }
+.wx-lbl { font-size: 14px; font-weight: 600; min-width: 64px; }
+.wx-cur { text-align: center; }
+.size-sub { font-size: 13px; font-weight: 700; color: var(--muted); margin: 6px 0 2px; }
+.size-sub:first-child { margin-top: 0; }
 .magic-input { min-height: 150px; max-height: 42vh; overflow-y: auto; }
 .magic-input.is-empty::before { white-space: pre-wrap; }
 .magic-summary { font-size: 14px; }
@@ -630,7 +642,7 @@ span[data-icon] svg { width: 100%; height: 100%; }
 .photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .photo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.range-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 48px; align-items: center; gap: 10px; margin-bottom: 10px; }
+.range-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) minmax(48px, auto); align-items: center; gap: 10px; margin-bottom: 10px; }
 .range-row label { font-size: 14px; color: var(--muted); font-weight: 600; }
 .range-row output { text-align: right; font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
 input[type=range] { width: 100%; accent-color: var(--blue); height: 28px; }
@@ -883,7 +895,7 @@ input[type=range] { width: 100%; accent-color: var(--blue); height: 28px; }
   .btn-export { padding: 0 12px; }
   .stage-foot .warn, .stage-foot .warnings .btn { font-size: 12px; }
   .topbar .icon-btn { width: 40px; }
-  .range-row { grid-template-columns: 92px minmax(0, 1fr) 44px; }
+  .range-row { grid-template-columns: 92px minmax(0, 1fr) minmax(44px, auto); }
 }
 
 /* ------------------------------------------------------ планшет/комп */

@@ -59,6 +59,8 @@ const RUBRICS = [
     slides: ['post'], card: 'post', layouts: ['post'] },
   { id: 'reels', name: 'Рилс', desc: 'Обложка для рилс, 1080×1920',
     slides: ['reels'], card: 'reels', layouts: ['reels'] },
+  { id: 'weather', name: 'Погода', desc: 'Сторис: погода и курсы валют, 1080×1920',
+    slides: ['weather'], card: 'weather', layouts: ['weather'] },
 ];
 const RUBRIC_BY_ID = Object.fromEntries(RUBRICS.map(r => [r.id, r]));
 
@@ -75,7 +77,23 @@ const FIELD_INFO = {
   place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
   price: { label: 'Цена', group: 'body', hint: '💵 добавится сам', optional: true },
   badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»', optional: true },
+  // погода (сторис)
+  day: { label: 'Дата', group: 'title', hint: 'ставится сама, можно поправить' },
+  wicon: { label: 'Эмодзи погоды', group: 'body' },
+  tMorn: { label: 'Утром', group: 'body', hint: '«+» добавится сам' },
+  tDay: { label: 'Днем', group: 'body', hint: '«+» добавится сам' },
+  tEve: { label: 'Вечером', group: 'body', hint: '«+» добавится сам' },
+  ficon: { label: 'Эмодзи курсов', group: 'body' },
+  curA: { label: 'Валюта, строка 1', group: 'body' },
+  rateA: { label: 'Курс, строка 1', group: 'body' },
+  curB: { label: 'Валюта, строка 2', group: 'body' },
+  rateB: { label: 'Курс, строка 2', group: 'body' },
+  curC: { label: 'Валюта, строка 3', group: 'body' },
+  rateC: { label: 'Курс, строка 3', group: 'body' },
 };
+// быстрый выбор эмодзи в форме погоды
+const WEATHER_ICONS = ['☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '🌫️', '💨', '🌈'];
+const MONEY_ICONS = ['💵', '💰', '💸', '💶', '💱', '🏦'];
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
   'new-card': { title: 'Название заведения', body: 'Описание (белая плашка)' },
@@ -1298,7 +1316,17 @@ async function recordVideoSlide(slide, index, onProgress, story = false) {
 /* ------------------------------------------------------------- проекты */
 
 function newSlide(layout) {
-  return { id: newId(), layout, fields: {}, opts: {}, size: {}, photo: null };
+  const L = LAYOUTS[layout];
+  return { id: newId(), layout, fields: L && L.defaults ? L.defaults() : {}, opts: {}, size: {}, photo: null };
+}
+
+/* Перешли на макет со значениями по умолчанию (погода) — заполняем пустые поля. */
+function fillDefaults(slide) {
+  const L = layoutOf(slide);
+  if (!L.defaults) return;
+  for (const [key, value] of Object.entries(L.defaults())) {
+    if (!(slide.fields[key] || '').trim()) slide.fields[key] = value;
+  }
 }
 
 function currentSlide() {
@@ -1567,6 +1595,7 @@ function changeLayout(layout, index = state.current) {
   if (slide.layout === layout) return;
   pushUndo();
   slide.layout = layout;
+  fillDefaults(slide);
   if (!LAYOUTS[layout].photo) { /* фото остаётся в данных — вернётся при смене обратно */ }
   commit({ structure: true });
 }
@@ -1946,9 +1975,9 @@ function autoFit(index = state.current) {
     t = Math.max(FIT_MIN, Math.round((t - 0.02) * 100) / 100);
     b = Math.max(FIT_MIN, Math.round((b - 0.02) * 100) / 100);
   }
-  slide.size = { title: t, body: b };
+  slide.size = Object.assign({}, slide.size, { title: t, body: b });
   if (test(slide.size)) say('Даже мельче не помещается — сократите текст или перенесите часть на новый слайд');
-  else say('Готово: кегль ' + Math.round(b * 100) + '%');
+  else say('Готово: текст уменьшен до ' + Math.round(b * 100) + '% от макета');
   commit({ panel: true });
 }
 
@@ -3029,13 +3058,13 @@ function buildRichField(slide, key, label, ph, info, mode = 'full') {
     mode === 'full' ? fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)') : null,
     fmtButton(editor, 'red', null, 'Красный'),
     fmtButton(editor, 'cream', null, 'Кремовый'),
-    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'),
-    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать выделение'));
-  const tip = mode === 'full' ? 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' : 'Выделите слова и выберите цвет или маркер.';
+    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'));
+  // повторное нажатие на цвет / маркер / Ж / К снимает его — отдельной кнопки «Обычный» нет;
+  // у заголовков подсказки под полем нет
   return h('div', { class: 'field rich-field' },
     h('span', { class: 'field-label' }, h('span', { text: label }), tools),
     editor,
-    h('span', { class: 'field-hint', text: (info.hint ? info.hint + '. ' : '') + tip }));
+    mode === 'full' ? h('span', { class: 'field-hint', text: 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' }) : null);
 }
 
 /* Экранные цвета выделения в поле (на слайде — ACCENT_RED / BRAND_CREAM). */
@@ -3146,7 +3175,7 @@ function syncFmtStates(ed) {
 }
 
 /*
- * Всплывающая панель «Ж · К · Обычный» у выделенного текста — на телефоне.
+ * Всплывающая панель «Ж · К · цвета · маркер» у выделенного текста — на телефоне.
  * В системное меню (Вырезать / Копировать / Вставить) свои пункты не
  * добавить, а наши кнопки над полем оно закрывает. Поэтому своя панель:
  * под выделением (системное меню встаёт над ним, «ручки» — прямо под
@@ -3163,7 +3192,7 @@ const POPUP_ABOVE = 64;   // над выделением: место под си
 function buildFmtPopup() {
   fmtPopup = h('div', { class: 'fmt-pop', role: 'toolbar', 'aria-label': 'Начертание', hidden: true });
   for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['red', null, 'Красный'],
-    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер'], ['plain', 'Обычный', 'Обычный — убрать выделение']]) {
+    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер']]) {
     const b = h('button', { type: 'button', class: 'fmt-pop-btn fmt-' + cmd, text, title, 'aria-label': title,
       'aria-pressed': cmd === 'plain' ? null : 'false' });
     if (cmd === 'red' || cmd === 'cream') b.append(h('span', { class: 'fmt-dot', 'aria-hidden': 'true' }));
@@ -3288,7 +3317,8 @@ function buildSlideForm() {
 
   // тексты
   const fields = h('div', { class: 'section' });
-  for (const key of L.fields) fields.append(buildField(slide, key, i));
+  if (L.id === 'weather') fields.append(...buildWeatherFields(slide));
+  else for (const key of L.fields) fields.append(buildField(slide, key, i));
   // доп. блоки «заголовок + текст» (карточка интервью)
   if (L.sections > 1) {
     const n = sectionCount(slide, L);
@@ -3313,7 +3343,7 @@ function buildSlideForm() {
   const look = [];
   // выравнивание и расположение текста (по умолчанию — как в макете)
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
-  look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
+  if (!L.fixedAlign) look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
     segControl([['left', 'По левому краю', 'text-align-left'], ['center', 'По центру', 'text-align-center'],
       ['right', 'По правому краю', 'text-align-right'], ['justify', 'По ширине', 'text-align-justify']],
     align, v => setTextLayout('align', v), 'Выравнивание текста')));
@@ -3364,11 +3394,8 @@ function buildSlideForm() {
   }
   if (look.length) root.append(section('Оформление', null, ...look));
 
-  // кегль
-  const groups = new Set(L.fields.map(k => FIELD_INFO[k].group));
-  const sizeRows = [];
-  if (groups.has('title')) sizeRows.push(rangeRow('Заголовок', { min: 50, max: 140, value: Math.round((slide.size.title || 1) * 100), unit: '%', key: 'size-title', onInput: x => setSize('title', x / 100) }));
-  if (groups.has('body')) sizeRows.push(rangeRow('Текст', { min: 50, max: 140, value: Math.round((slide.size.body || 1) * 100), unit: '%', key: 'size-body', onInput: x => setSize('body', x / 100) }));
+  // кегль и межстрочный — в пунктах (единицах макета)
+  const sizeRows = buildSizeRows(slide, i);
   const resetSize = btn('btn btn-ghost btn-sm', null, 'Как в макете', () => {
     pushUndo(); slide.size = {}; commit({ panel: true });
   });
@@ -3387,6 +3414,119 @@ function buildSlideForm() {
     act('btn btn-danger', 'trash', 'Удалить слайд', () => deleteSlide()))));
 
   return root;
+}
+
+/*
+ * Форма погоды (сторис): дата с «Сегодня / Завтра», эмодзи с быстрым
+ * выбором, температура «Утром / Днем / Вечером» и курсы — знак валюты +
+ * число. Подписи «Утром…» на слайде не меняются. Поля — обычные
+ * (slide.fields), так что быстрая правка с превью работает как везде.
+ */
+function buildWeatherFields(slide) {
+  const L = layoutOf(slide);
+  const input = (key, cls = '') => {
+    const c = h('input', { class: 'input ' + cls, type: 'text', placeholder: placeholderFor(L, key),
+      enterkeyhint: 'done', autocomplete: 'off', 'aria-label': FIELD_INFO[key].label });
+    c.value = slide.fields[key] || '';
+    c.dataset.field = key;
+    c.addEventListener('input', () => { setField(key, c.value); syncChips(); });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter') c.blur(); });
+    return c;
+  };
+  const chipSets = [];
+  const syncChips = () => chipSets.forEach(([key, list]) =>
+    list.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.value === (slide.fields[key] || '').trim())));
+  // кнопки-варианты: нажали — значение в поле и на слайд
+  const chips = (key, control, options, cls = '') => {
+    const list = h('div', { class: 'chips ' + cls });
+    for (const [label, value] of options) {
+      const b = h('button', { type: 'button', class: 'chip-btn', text: label });
+      b.dataset.value = value;
+      b.addEventListener('click', () => { control.value = value; setField(key, value); syncChips(); });
+      list.append(b);
+    }
+    chipSets.push([key, list]);
+    return list;
+  };
+  const tomorrow = new Date(Date.now() + 864e5);
+  const day = input('day');
+  const wicon = input('wicon', 'wx-emoji');
+  const ficon = input('ficon', 'wx-emoji');
+  const out = [
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Дата' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.day.hint })),
+      day,
+      chips('day', day, [['Сегодня', ruDayMonth()], ['Завтра', ruDayMonth(tomorrow)]])),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Погода' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.tMorn.hint })),
+      h('div', { class: 'wx-pick' }, wicon, chips('wicon', wicon, WEATHER_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid' }, WEATHER_ROWS.map(([key, label]) =>
+        [h('span', { class: 'wx-lbl', text: label }), input(key)]).flat())),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Курсы валют' })),
+      h('div', { class: 'wx-pick' }, ficon, chips('ficon', ficon, MONEY_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid wx-rates' }, WEATHER_RATES.map(([cur, rate]) =>
+        [input(cur, 'wx-cur'), input(rate)]).flat())),
+  ];
+  syncChips();
+  return out;
+}
+
+/*
+ * «Размер текста»: кегль и межстрочный интервал заголовка и текста — в
+ * пунктах макета (как в Figma). Хранятся множителями к макету
+ * (slide.size.title / body, titleLead / bodyLead), пункты считаем по
+ * главному полю группы: title / body или L.sizeKeys, иначе первое поле
+ * группы. Кегль и интервал берём из отрисовки (res.texts).
+ */
+const LEAD_MIN = 0.5, LEAD_MAX = 2;
+
+function groupMetrics(slide, index) {
+  const L = layoutOf(slide);
+  const c = document.createElement('canvas');
+  c.width = c.height = 4;
+  const env = { assets, photo: null, transform: {}, ghost: true, noText: true, k: 1, cardNo: index >= 0 ? cardNo(index) : 1 };
+  const texts = renderSlide(c.getContext('2d'), slide, env).texts || [];
+  const out = {};
+  for (const group of ['title', 'body']) {
+    const keys = slideFields(slide, L).filter(k => FIELD_INFO[baseKey(k)].group === group);
+    if (!keys.length) continue;
+    const main = (L.sizeKeys && L.sizeKeys[group]) || (keys.includes(group) ? group : null);
+    const t = texts.find(x => x.key === main) || keys.map(k => texts.find(x => x.key === k)).find(Boolean);
+    if (!t) continue;
+    const sc = sizeScale(slide, group), lm = leadScale(slide, group);
+    out[group] = { size: t.size / sc, lead: t.lead / (sc * lm) };
+  }
+  return out;
+}
+
+function buildSizeRows(slide, index) {
+  const m = groupMetrics(slide, index);
+  const rows = [];
+  for (const [group, title] of [['title', 'Заголовок'], ['body', 'Текст']]) {
+    const g = m[group];
+    if (!g) continue;
+    const sc = () => sizeScale(slide, group);
+    const leadPt = () => g.lead * sc() * leadScale(slide, group);
+    const leadRow = rangeRow('Интервал', { min: Math.round(g.lead * sc() * LEAD_MIN), max: Math.round(g.lead * sc() * LEAD_MAX),
+      value: Math.round(leadPt()), unit: ' пт', key: 'lead-' + group,
+      onInput: x => setSize(group + 'Lead', x / (g.lead * sc())) });
+    // кегль меняется — интервал в пунктах растёт вместе с ним (множитель тот же)
+    const syncLead = () => {
+      const input = leadRow.querySelector('input');
+      input.min = Math.round(g.lead * sc() * LEAD_MIN);
+      input.max = Math.round(g.lead * sc() * LEAD_MAX);
+      input.value = Math.round(leadPt());
+      leadRow.querySelector('output').textContent = input.value + ' пт';
+    };
+    const sizeRow = rangeRow('Кегль', { min: Math.round(g.size * 0.5), max: Math.round(g.size * 1.4),
+      value: Math.round(g.size * sc()), unit: ' пт', key: 'size-' + group,
+      onInput: x => { setSize(group, x / g.size); syncLead(); } });
+    rows.push(h('div', { class: 'size-sub', text: title }), sizeRow, leadRow);
+  }
+  return rows;
 }
 
 function buildPhotoSection(slide) {
@@ -4242,12 +4382,12 @@ function openHelp() {
     </ul>
     <h4>Жирный, курсив, цвет, выравнивание</h4>
     <ul>
-      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный), «К» (курсив) или «Обычный». На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
-      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает, «Обычный» — снимает всё.</li>
+      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный) или «К» (курсив), повторное нажатие снимает. На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
+      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает.</li>
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
       <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
-      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К · Обычный» и цвета.</li>
+      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К», цвета и маркер.</li>
     </ul>
     <h4>Если текст не помещается или плохо виден</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>

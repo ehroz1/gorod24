@@ -60,7 +60,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `shade`, `arrow` (`'on'` = shown by default), `ph` (placeholders; may be a
   function of `env`, used for «02. Заголовок» numbering) and `render`.
   16 layouts = every frame of the Figma page (page `277:2` plus the
-  «Киноафиша» section `304:192`). Covers share `renderCover`
+  «Киноафиша» section `304:192`), plus `weather` (see below). Covers share `renderCover`
   (bottom-anchored stack: last baseline at y=1650, `gap` — 60 by default —
   between title and subtitle; `logo` overrides the logo box, e.g. the
   centred one on the Киноафиша cover). Киноафиша was built from Figma
@@ -69,6 +69,20 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Inter 42) and match the node positions within 1px, but colours — white
   text, white pill badge with black text — are assumptions; re-check them
   against a screenshot when the quota allows.
+- **Погода — сторис** (`weather`, 1080×1920, rubric `weather`): not in
+  Figma — measured from the owner's finished stories (date Bravo Pro 168,
+  rows 108 / track 4, rates 110, logo `WEATHER_LOGO`; the overlay matched
+  within ~1px). Fields `day wicon tMorn tDay tEve ficon curA rateA curB
+  rateB curC rateC` (letter suffixes, not digits — `baseKey` strips
+  digits); the «Утром / Днем / Вечером» labels are fixed text without a key.
+  `L.defaults()` fills today's date (`ruDayMonth`), emoji and $ € ₽ in
+  `newSlide` and on `changeLayout` (`fillDefaults`, empty keys only).
+  `formatTemp` adds «+» / real minus. Shade is a flat dim
+  (`WEATHER_DIM` × `shadeStrength`, `L.shadeDefault` 0.4); `fixedAlign`
+  hides the alignment control, valign moves the whole column (default
+  middle = the stories' position). Form: `buildWeatherFields` (compact
+  grid, «Сегодня / Завтра» and emoji chips `WEATHER_ICONS` /
+  `MONEY_ICONS`); quick edit uses the generic `buildField`.
 - Photos: `drawPhotoRect` / `drawPhotoQuad` (rotated slot, `bleed` hides the
   black placeholder edge) → `drawCover` = object-fit: cover with
   `transform {zoom, x, y}`; `x/y` are design units from centre, clamped so no
@@ -171,6 +185,13 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   normalized text + per-char flags and measures per style (`measureSlice`,
   `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
   through the single `fillText` fast path.
+- **Size and line spacing**: `slide.size = {title, body, titleLead,
+  bodyLead}` — multipliers to the layout (`sizeScale`, `leadScale`;
+  `fieldBlock` applies the lead via `withLead`). The form shows them in
+  design points (`buildSizeRows`): `groupMetrics` renders the slide with
+  `noText` and takes `size`/`lead` of the group's main text from
+  `res.texts` (`title`/`body` key, `L.sizeKeys`, else the first field of
+  the group). Title-type rich fields have no hint line under them.
 - `env.noText`: everything except text (blocks are still measured and
   recorded in `res.texts`) — the background under each text, used by the
   contrast check.
@@ -221,7 +242,8 @@ against the Figma screenshots and matches (line breaks differ only where
   bodyN → mode `'full'`; `'color'` for title, label and `layout.plain`
   fields → colour and marker only, no Ж/К, ⌘B/⌘I ignored): a
   `contenteditable` div instead of a textarea (`buildRichField`) with
-  «Ж / К / red / cream / marker «А» / Обычный» buttons (`execCommand`
+  «Ж / К / red / cream / marker «А»» buttons — no «Обычный», a second press
+  toggles off (`execCommand`
   bold/italic, `foreColor`/`hiliteColor` with `styleWithCSS`,
   removeFormat; colours in the editor are UI proxies `UI_RED`/`UI_CREAM`/
   `UI_MARK`, `readRich.flagsOf` maps computed colours back to flags; the
@@ -239,7 +261,7 @@ against the Figma screenshots and matches (line breaks differ only where
   (a label would forward clicks to the first button).
 - **Selection popup** (touch only, `isTouch()`): the OS text-selection menu
   (Cut/Copy/Paste) can't be extended from a web page and covers the
-  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · Обычный»
+  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · colours · marker»
   bar (`.fmt-pop`, one global element) below a non-collapsed selection in a
   rich field — `POPUP_BELOW` leaves room for the selection handles; if it
   doesn't fit above the keyboard it goes `POPUP_ABOVE` the selection (over
