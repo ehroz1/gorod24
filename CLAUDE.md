@@ -138,6 +138,24 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Strip layouts apply the same rule locally (com-top/com-bottom, fav-card,
   ev-card body); com-* pick a white logo over the photo band and black over
   the white part.
+- **Collaboration** (`slide.opts.collab` = partner id; only post covers —
+  `L.collab`, set in the `LAYOUTS` loop for `*-cover` at 1800 high):
+  `drawCoverLogo` (renderCover, renderEventsCover) draws «our logo | line |
+  partner» instead of the single logo, following the co-branding page of
+  the WE media group brand kit (`ehroz1/wemedia-group-branding`,
+  `assets/guides/edubridge-guide.pdf`, «05 · Ко-брендинг»): ours first,
+  line `COLLAB_LINE` = 3 units, 1.5× our height, gaps 2X (X = 11 % of our
+  width), partner balanced by optical mass (bbox area × √ink density,
+  `inkMass`) and clamped to ≤1.6× our height (`COLLAB_*`), same colour
+  for both. The row keeps our logo's vertical centre and the spot's edge,
+  so default opts stay pixel-identical and text regions are unchanged.
+  Partners in `app.js`: bundled = `brand/partners/*.svg` (white versions,
+  explicit width/height added) listed in `partners.json` → `build.py` →
+  `BUNDLED_PARTNERS`; user uploads in IndexedDB `partner/<id>` = `{name,
+  blob}`. `logoMask()` turns any image into a white mask (opaque images:
+  difference from the corner colour), `env.assets.partner(id)` →
+  `{white, black, mass, preview}`; an id missing on this device draws only
+  our logo. UI: «Коллаборация» row in «Оформление» → `openCollabSheet()`.
 - **Bold / italic / colour inside a field**: `slide.fmt[key] = [[len, flags], …]`
   (run lengths covering the whole text; flags `BOLD` 1, `ITALIC` 2 — the
   `STYLE_BITS` that pick a font face — plus `RED` 4 (`ACCENT_RED` #700004),

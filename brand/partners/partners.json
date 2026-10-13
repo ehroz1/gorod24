@@ -1,0 +1,42 @@
+[
+  {
+    "id": "wemedia",
+    "name": "WE media group",
+    "file": "wemedia.svg"
+  },
+  {
+    "id": "weproject",
+    "name": "WE project",
+    "file": "weproject.svg"
+  },
+  {
+    "id": "weproject-media",
+    "name": "weproject.media",
+    "file": "weproject-media.svg"
+  },
+  {
+    "id": "creative-asia",
+    "name": "Creative Asia",
+    "file": "creative-asia.svg"
+  },
+  {
+    "id": "thetech",
+    "name": "THE TECH",
+    "file": "thetech.svg"
+  },
+  {
+    "id": "thetech-stacked",
+    "name": "THE TECH — в две строки",
+    "file": "thetech-stacked.svg"
+  },
+  {
+    "id": "office",
+    "name": "OFFICE",
+    "file": "office.svg"
+  },
+  {
+    "id": "edubridge",
+    "name": "edubridge",
+    "file": "edubridge.svg"
+  }
+]

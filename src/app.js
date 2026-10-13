@@ -356,7 +356,7 @@ async function deleteProjectMedia(projectId, keepIds = null) {
 
 /* ------------------------------------------------------ бренд и шрифты */
 
-const assets = { logoWhite: null, logoBlack: null, stack: null };
+const assets = { logoWhite: null, logoBlack: null, logoMass: 0.5, stack: null, partner: id => partnerAsset(id) };
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -414,6 +414,7 @@ async function setLogoFrom(src) {
   const trimmed = trimTransparent(img);
   assets.logoWhite = tint(trimmed, '#ffffff');
   assets.logoBlack = tint(trimmed, '#000000');
+  assets.logoMass = inkMass(trimmed);
   const img2 = h('img', { src: assets.logoWhite.toDataURL('image/png'), alt: '' });
   el.brandLogo.replaceChildren(img2);
 }
@@ -429,6 +430,7 @@ async function loadBrand() {
     }
     if (BUNDLED_BRAND.logo) await setLogoFrom(BUNDLED_BRAND.logo).catch(() => {});
   })());
+  jobs.push(loadPartners());
   await Promise.all(jobs);
 }
 
@@ -525,6 +527,177 @@ function afterBrandChange() {
   syncFontStretch();
   if (state.screen === 'home') renderHome();
   else { invalidateThumbs(); refreshEditor(); }
+}
+
+/* ------------------------------------------------- партнёры (коллаборация) */
+/*
+ * Логотипы для коллабораций на обложках (opts.collab, см. drawCoverLogo в
+ * render.js). Встроенные — все логотипы бренд-кита WE media group
+ * (BUNDLED_PARTNERS, brand/partners/), свои — загружаются в шторке и лежат
+ * в IndexedDB под ключом partner/<id> как { name, blob }. Каждый логотип
+ * превращается в маску (как наш): по правилам ко-брендинга оба знака одного
+ * цвета. В проекте хранится только id: чужой логотип, загруженный на другом
+ * устройстве, здесь не найдётся — обложка покажет один наш логотип.
+ */
+const partners = new Map();   // id → { id, name, user, asset: {white, black, mass, preview} | null }
+const PARTNER_PREFIX = 'partner/';
+const PARTNER_SIDE = 1000;    // длинная сторона растра маски
+
+function partnerAsset(id) {
+  const p = partners.get(id);
+  return p ? p.asset : null;
+}
+
+/* Доля закрашенных пикселей знака (в его рамке) — «плотность» для баланса. */
+function inkMass(canvas) {
+  let data;
+  try { data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data; } catch { return 0.5; }
+  let sum = 0;
+  for (let i = 3; i < data.length; i += 4) sum += data[i];
+  return sum / 255 / (canvas.width * canvas.height);
+}
+
+/* Картинка → белая маска с обрезанными полями. У непрозрачной картинки
+   (JPG, PNG на подложке) знак — всё, что отличается от цвета фона в углах. */
+function logoMask(img) {
+  let [iw, ih] = mediaSize(img);
+  if (!iw || !ih) { iw = PARTNER_SIDE; ih = PARTNER_SIDE / 2; }
+  const s = PARTNER_SIDE / Math.max(iw, ih);
+  const w = Math.max(1, Math.round(iw * s)), hh = Math.max(1, Math.round(ih * s));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = hh;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, hh);
+  const id = ctx.getImageData(0, 0, w, hh);
+  const d = id.data;
+  let clear = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 200) clear++;
+  if (clear < w * hh * 0.01) {
+    const bg = [0, 0, 0];
+    const corners = [0, w - 1, (hh - 1) * w, (hh - 1) * w + w - 1];
+    for (const k of corners) for (let ch = 0; ch < 3; ch++) bg[ch] += d[k * 4 + ch] / corners.length;
+    for (let i = 0; i < d.length; i += 4) {
+      const diff = Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2]));
+      d[i + 3] = Math.round(Math.min(Math.max((diff - 30) / 90, 0), 1) * 255);
+    }
+  }
+  for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255;
+  ctx.putImageData(id, 0, 0);
+  return trimTransparent(c);
+}
+
+async function partnerFrom(src) {
+  const img = await loadImage(src);
+  const white = logoMask(img);
+  const mass = inkMass(white);
+  if (mass < 0.005 || mass > 0.98) throw new Error('empty logo');
+  return { white, black: tint(white, '#000000'), mass, preview: white.toDataURL('image/png') };
+}
+
+async function loadPartners() {
+  const jobs = [];
+  for (const b of (typeof BUNDLED_PARTNERS !== 'undefined' ? BUNDLED_PARTNERS : [])) {
+    const p = { id: b.id, name: b.name, user: false, asset: null };
+    partners.set(b.id, p);
+    jobs.push(partnerFrom(b.src).then(a => { p.asset = a; }).catch(() => partners.delete(b.id)));
+  }
+  const keys = (await idbKeys()) || [];
+  for (const key of keys) {
+    if (typeof key !== 'string' || !key.startsWith(PARTNER_PREFIX)) continue;
+    jobs.push(idbGet(key).then(async rec => {
+      if (!rec || !(rec.blob instanceof Blob)) return;
+      const url = URL.createObjectURL(rec.blob);
+      try {
+        partners.set(key.slice(PARTNER_PREFIX.length),
+          { id: key.slice(PARTNER_PREFIX.length), name: rec.name || 'Партнёр', user: true, asset: await partnerFrom(url) });
+      } catch { /* битый файл — пропускаем */ }
+      URL.revokeObjectURL(url);
+    }));
+  }
+  await Promise.all(jobs);
+}
+
+function setCollab(id) {
+  const slide = currentSlide();
+  pushUndo();
+  if (id) slide.opts.collab = id;
+  else delete slide.opts.collab;
+  commit({ panel: true });
+}
+
+function uploadPartner() {
+  const picker = el.brandPicker;
+  picker.accept = 'image/png,image/webp,image/svg+xml,image/jpeg';
+  picker.value = '';
+  picker.onchange = async () => {
+    const file = picker.files && picker.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    let asset;
+    try { asset = await partnerFrom(url); } catch { asset = null; }
+    URL.revokeObjectURL(url);
+    if (!asset) { say('Не получилось выделить логотип — нужен PNG с прозрачным фоном, SVG или картинка на ровном фоне'); return; }
+    const id = 'u-' + Date.now().toString(36);
+    const name = (file.name || '').replace(/\.[^.]+$/, '').trim() || 'Партнёр';
+    await idbPut(PARTNER_PREFIX + id, { name, blob: file });
+    partners.set(id, { id, name, user: true, asset });
+    closeSheet();
+    setCollab(id);
+    say('Логотип партнёра добавлен');
+  };
+  picker.click();
+}
+
+async function deletePartner(id) {
+  const p = partners.get(id);
+  if (!p || !p.user) return;
+  await idbDel(PARTNER_PREFIX + id);
+  partners.delete(id);
+  // на слайдах этого проекта убираем ссылку на удалённый логотип
+  let used = false;
+  for (const slide of state.project.slides) if (slide.opts.collab === id) used = true;
+  if (used) {
+    pushUndo();
+    for (const slide of state.project.slides) if (slide.opts.collab === id) delete slide.opts.collab;
+    commit({ panel: true });
+  }
+  say('Логотип «' + p.name + '» удалён');
+  openCollabSheet();
+}
+
+function partnerChip(p) {
+  const chip = h('span', { class: 'partner-chip' });
+  if (p && p.asset) chip.append(h('img', { src: p.asset.preview, alt: '' }));
+  return chip;
+}
+
+function openCollabSheet() {
+  const slide = currentSlide();
+  const cur = slide.opts.collab || null;
+  const opt = (p, label) => {
+    const b = h('button', { type: 'button', class: 'partner-opt' + ((p ? p.id : null) === cur ? ' current' : ''),
+      'aria-pressed': String((p ? p.id : null) === cur) },
+      p ? partnerChip(p) : h('span', { class: 'partner-chip none', text: 'Только наш' }),
+      h('span', { class: 'partner-name', text: label }));
+    b.addEventListener('click', () => { closeSheet(); setCollab(p ? p.id : null); });
+    if (!p || !p.user) return b;
+    const del = iconBtn('trash', 'Удалить логотип «' + p.name + '»', e => { e.stopPropagation(); deletePartner(p.id); }, 'sm partner-del');
+    return h('div', { class: 'partner-cell' }, b, del);
+  };
+  const list = [...partners.values()].filter(p => p.asset);
+  const own = list.filter(p => !p.user), mine = list.filter(p => p.user);
+  const body = h('div', {},
+    h('div', { class: 'sheet-group' }, h('div', { class: 'partner-grid' },
+      opt(null, 'Без партнёра'), own.map(p => opt(p, p.name)))),
+    h('div', { class: 'sheet-group' }, h('h4', { text: 'Свои логотипы' }),
+      mine.length ? h('div', { class: 'partner-grid' }, mine.map(p => opt(p, p.name))) : null,
+      btn('btn btn-outline btn-sm', 'upload-simple', 'Загрузить логотип партнёра', () => uploadPartner()),
+      h('p', { class: 'sheet-note', text: 'PNG с прозрачным фоном или SVG, подойдёт и картинка на ровном фоне. ' +
+        'Логотип станет одноцветным, как наш, а размер подберётся сам: по правилам ко-брендинга ' +
+        'наш логотип слева, между ними линия, знак партнёра не больше чем в 1,6 раза выше нашего. ' +
+        'Свои логотипы хранятся только на этом устройстве.' })));
+  openSheet('Коллаборация', body);
 }
 
 /* ------------------------------------------------------------------ фото */
@@ -3160,6 +3333,18 @@ function buildSlideForm() {
     logoPicker(L, spot, v => setLogoSpot(v))));
   if (slide.opts.logo && state.project.slides.some(x => logoSpot(x, layoutOf(x)) !== spot)) {
     look.push(btn('btn btn-ghost btn-sm look-all', null, 'Логотип так же на всех слайдах', () => setLogoSpotAll()));
+  }
+  // коллаборация: логотип партнёра рядом с нашим (только обложки постов)
+  if (L.collab) {
+    const id = slide.opts.collab;
+    const p = id ? partners.get(id) : null;
+    const pick = h('button', { type: 'button', class: 'btn btn-outline btn-sm collab-pick' },
+      p && p.asset ? partnerChip(p) : iconSpan('plus'), p && p.asset ? p.name : 'Добавить партнёра');
+    pick.addEventListener('click', () => openCollabSheet());
+    look.push(h('div', { class: 'look-row' },
+      h('span', { class: 'lbl-col' }, h('span', { class: 'lbl', text: 'Коллаборация' }),
+        id && !(p && p.asset) ? h('span', { class: 'field-hint', text: 'Логотипа партнёра нет на этом устройстве' }) : null),
+      pick));
   }
   const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
   tone.querySelector('.lbl').prepend(h('span', { class: 'swatch', 'aria-hidden': 'true' }));

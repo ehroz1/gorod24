@@ -540,6 +540,78 @@ function drawLogo(ctx, env, box, color) {
   ctx.drawImage(logo, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
 }
 
+/*
+ * Коллаборация (opts.collab — id партнёра; только обложки постов, L.collab):
+ * наш логотип, разделитель и логотип партнёра в один ряд. Правила — раздел
+ * «Ко-брендинг» бренд-кита WE media group (ehroz1/wemedia-group-branding,
+ * edubridge-guide.pdf), пересчитанные на наш знак:
+ *  - наш логотип первым, слева (в наших каналах — так);
+ *  - разделитель — линия 2 px на 1080 (у нас 3 единицы), высота 1,5× нашего
+ *    знака, отступ до логотипов 2X, X = 11 % ширины нашего логотипа;
+ *  - баланс по оптической массе, знак партнёра не выше 1,6× нашего;
+ *  - оба логотипа одного цвета: партнёр — такая же маска, как наш.
+ * Ряд встаёт в ту же точку, что и одиночный логотип: по вертикали — центр
+ * нашего знака на прежнем месте, по горизонтали — к тому же краю (или центру).
+ * env.assets.partner(id) → { white, black, mass } или null (ещё грузится /
+ * чужой логотип есть только на другом устройстве — тогда рисуем один наш).
+ */
+const COLLAB_LINE = 3;          // толщина разделителя
+const COLLAB_LINE_K = 1.5;      // высота разделителя — в высотах нашего знака
+const COLLAB_X = 0.11;          // X — доля ширины нашего логотипа
+const COLLAB_GAP_X = 2;         // отступ от разделителя до логотипов — 2X
+const COLLAB_MAX_K = 1.6;       // партнёр не выше 1,6× нашего знака
+const COLLAB_MIN_K = 0.45;      // и не мельче (очень плотный знак иначе превращается в точку)
+const COLLAB_MAX_W = 3.6;       // ширина партнёра — не больше 3,6 высоты нашего знака
+const COLLAB_LINE_ALPHA = 0.6;  // линия спокойнее логотипов (в гайде она серая)
+
+function collabPartner(slide, L, env) {
+  if (!L.collab || !env.assets.logoWhite) return null;
+  const id = slide.opts && slide.opts.collab;
+  return id && env.assets.partner ? env.assets.partner(id) : null;
+}
+
+/* Размеры ряда. «Оптическая масса» = площадь рамки знака × √(доля краски):
+   тонкий контурный знак весит меньше такого же по размеру плотного, но не
+   пропорционально краске — иначе тонкие надписи раздувались бы. */
+function collabSizes(env, def, p) {
+  const our = env.assets.logoWhite;
+  const s = Math.min(def.w / our.width, def.h / our.height);
+  const ow = our.width * s, oh = our.height * s;
+  const a = p.white.width / p.white.height;
+  const oMass = (ow * oh) * Math.sqrt(env.assets.logoMass || 0.5);
+  let ph = Math.sqrt(oMass / (a * Math.sqrt(Math.max(p.mass, 0.02))));
+  ph = Math.min(Math.max(ph, COLLAB_MIN_K * oh), COLLAB_MAX_K * oh);
+  if (ph * a > COLLAB_MAX_W * oh) ph = COLLAB_MAX_W * oh / a;
+  const gap = COLLAB_GAP_X * COLLAB_X * ow;
+  const pw = ph * a;
+  return { ow, oh, pw, ph, gap, lineH: COLLAB_LINE_K * oh, w: ow + 2 * gap + COLLAB_LINE + pw };
+}
+
+/* Логотип обложки: один наш или ряд «наш | партнёр». def — рамка логотипа в макете. */
+function drawCoverLogo(ctx, env, slide, L, def, color) {
+  const p = collabPartner(slide, L, env);
+  if (!p) { drawLogo(ctx, env, logoBox(slide, L, def), color); return; }
+  const g = collabSizes(env, def, p);
+  const spot = logoSpot(slide, L);
+  let x, cy;
+  if (spot === (L.logo || 'tr')) {
+    x = spot[1] === 'l' ? def.x : spot[1] === 'c' ? def.x + def.w / 2 - g.w / 2 : def.x + def.w - g.w;
+    cy = def.y + def.h / 2;
+  } else {
+    const b = logoBox(slide, L, { x: 0, y: 0, w: g.w, h: def.h });
+    x = b.x; cy = b.y + def.h / 2;
+  }
+  const black = color === BLACK;
+  const our = black ? env.assets.logoBlack : env.assets.logoWhite;
+  ctx.drawImage(our, x, cy - g.oh / 2, g.ow, g.oh);
+  ctx.save();
+  ctx.globalAlpha = COLLAB_LINE_ALPHA;
+  ctx.fillStyle = color;
+  ctx.fillRect(x + g.ow + g.gap, cy - g.lineH / 2, COLLAB_LINE, g.lineH);
+  ctx.restore();
+  ctx.drawImage(black ? p.black : p.white, x + g.ow + 2 * g.gap + COLLAB_LINE, cy - g.ph / 2, g.pw, g.ph);
+}
+
 // Стрелка «листай дальше»: линия 61px, толщина 10, скруглённые концы,
 // наконечник-«галочка» под 45°.
 const ARROW_X = 1285;   // левый край стрелки
@@ -908,7 +980,7 @@ function renderCover(ctx, slide, env, L, spec) {
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, spec.shadeTop, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, logoBox(slide, L, spec.logo || LOGO_BOX), WHITE);
+  drawCoverLogo(ctx, env, slide, L, spec.logo || LOGO_BOX, WHITE);
   if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
   drawBlock(ctx, title, x, items[0].top, ink(slide), align, alphaOf(title));
   drawBlock(ctx, sub, x, items[1].top, ink(slide), align, alphaOf(sub));
@@ -1048,7 +1120,7 @@ function renderEventsCover(ctx, slide, env, L) {
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
+  drawCoverLogo(ctx, env, slide, L, LOGO_BOX, WHITE);
   if (dates.lines.length) {
     // стрелка стоит справа на уровне дат — по правому краю даты заканчиваются перед ней
     const datesW = arrowOn(slide, L) && rowAlign(align) === 'right' ? ARROW_X - 40 - MARGIN : COL_W;
@@ -1392,13 +1464,14 @@ for (const [id, L] of Object.entries(LAYOUTS)) {
   L.id = id;
   L.W = L.size[0];
   L.H = L.size[1];
+  L.collab = L.H === 1800 && id.endsWith('-cover');   // коллаборация — только на обложках постов
 }
 
 /*
  * Рисует слайд. ctx уже отмасштабирован снаружи (setTransform) так, что
  * единица = пиксель макета; env.k — сколько пикселей устройства в единице
  * (нужно для теней, которые canvas не масштабирует).
- * env: { assets: {logoWhite, logoBlack, stack}, photo, transform, ghost, k }
+ * env: { assets: {logoWhite, logoBlack, logoMass, stack, partner(id)}, photo, transform, ghost, k }
  * Возвращает { overflow, photo, texts } — photo описывает область фото для
  * UI (перетаскивание кадра, кнопка «Добавить фото»), texts — где тексты
  * полей (правка нажатием на превью).
