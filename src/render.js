@@ -546,8 +546,10 @@ function drawLogo(ctx, env, box, color) {
  * «Ко-брендинг» бренд-кита WE media group (ehroz1/wemedia-group-branding,
  * edubridge-guide.pdf), пересчитанные на наш знак:
  *  - наш логотип первым, слева (в наших каналах — так);
- *  - разделитель — линия 2 px на 1080 (у нас 3 единицы), высота 1,5× нашего
- *    знака, отступ до логотипов 2X, X = 11 % ширины нашего логотипа;
+ *  - разделитель — линия 2 px на 1080 (у нас 3 единицы), отступ до логотипов
+ *    2X, X = 11 % ширины нашего логотипа; высота — 1× нашего знака (в гайде
+ *    1,5×, но так линия слишком длинная);
+ *  - в паре оба логотипа на 25 % меньше одиночного (COLLAB_SCALE);
  *  - баланс по оптической массе, знак партнёра не выше 1,6× нашего;
  *  - оба логотипа одного цвета: партнёр — такая же маска, как наш.
  * Ряд встаёт в ту же точку, что и одиночный логотип: по вертикали — центр
@@ -556,7 +558,8 @@ function drawLogo(ctx, env, box, color) {
  * чужой логотип есть только на другом устройстве — тогда рисуем один наш).
  */
 const COLLAB_LINE = 3;          // толщина разделителя
-const COLLAB_LINE_K = 1.5;      // высота разделителя — в высотах нашего знака
+const COLLAB_LINE_K = 1;        // высота разделителя — в высотах нашего знака (в гайде 1,5 — у нас вышло слишком длинно)
+const COLLAB_SCALE = 0.75;      // в паре оба логотипа на 25 % меньше одиночного — иначе ряд занимает много места
 const COLLAB_X = 0.11;          // X — доля ширины нашего логотипа
 const COLLAB_GAP_X = 2;         // отступ от разделителя до логотипов — 2X
 const COLLAB_MAX_K = 1.6;       // партнёр не выше 1,6× нашего знака
@@ -575,7 +578,7 @@ function collabPartner(slide, L, env) {
    пропорционально краске — иначе тонкие надписи раздувались бы. */
 function collabSizes(env, def, p) {
   const our = env.assets.logoWhite;
-  const s = Math.min(def.w / our.width, def.h / our.height);
+  const s = Math.min(def.w / our.width, def.h / our.height) * COLLAB_SCALE;
   const ow = our.width * s, oh = our.height * s;
   const a = p.white.width / p.white.height;
   const oMass = (ow * oh) * Math.sqrt(env.assets.logoMass || 0.5);

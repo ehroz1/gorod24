@@ -158,8 +158,9 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   partner» instead of the single logo, following the co-branding page of
   the WE media group brand kit (`ehroz1/wemedia-group-branding`,
   `assets/guides/edubridge-guide.pdf`, «05 · Ко-брендинг»): ours first,
-  line `COLLAB_LINE` = 3 units, 1.5× our height, gaps 2X (X = 11 % of our
-  width), partner balanced by optical mass (bbox area × √ink density,
+  line `COLLAB_LINE` = 3 units, 1× our height (guide says 1.5×, owner
+  found it too long), gaps 2X (X = 11 % of our width), both logos scaled to
+  75 % of the single logo (`COLLAB_SCALE`), partner balanced by optical mass (bbox area × √ink density,
   `inkMass`) and clamped to ≤1.6× our height (`COLLAB_*`), same colour
   for both. The row keeps our logo's vertical centre and the spot's edge,
   so default opts stay pixel-identical and text regions are unchanged.
