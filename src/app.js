@@ -4413,27 +4413,28 @@ function openHelp() {
  * «Собрать карусель из текста» — кнопка только на стартовом экране. Вставили
  * текст (из Заметок, Docs, Telegram — жирный сохраняется) → обложка и
  * карточки рубрики заполнены. Разбор:
- *  - строки до первого пункта — обложка (заголовок, подзаголовок);
- *  - пункт начинается со строки-заголовка: «1.» / «1)», жирной строки,
- *    вопроса (интервью) или короткой строки после пустой (подборки);
- *  - в пункте: адрес (📍, «ул.»…), дата и время, место, цена, «Премьера…» —
- *    по рубрике; остальное — текст карточки.
- * Если пунктов не нашлось — каждый абзац (через пустую строку) — карточка.
+ *  - слайды разделяют две пустые строки подряд или строка «//»
+ *    (текст после «//» — уже начало следующей карточки);
+ *  - первый блок — обложка (заголовок, подзаголовок);
+ *  - в карточке первая строка — заголовок, дальше: адрес (📍, «ул.»…),
+ *    дата и время, место, цена, «Премьера…» — по рубрике; остальное
+ *    (одиночные пустые строки — абзацы) — текст карточки.
  */
 const MAGIC_RUBRICS = ['int', 'zav', 'new', 'fav', 'ev', 'kino', 'com'];
 const STORE_MAGIC = 'g24.magic.v1';   // последняя выбранная рубрика и «нумеровать»
+const MAGIC_SPLIT = 'Слайды разделяйте двумя пустыми строками или строкой «//».';
 const MAGIC_HINTS = {
-  int: 'Первая строка — заголовок обложки. Дальше вопросы (с «?», «1.» или жирные) и ответы под ними.',
-  zav: 'Первая строка — обложка. Дальше заведения: название, строка с адресом (📍 или «ул.»), описание.',
-  new: 'Первая строка — обложка. Дальше места: название, адрес (📍 или «ул.»), описание.',
-  fav: 'Первая строка — обложка. Дальше места: название и пара предложений о нём.',
-  ev: 'Первая строка — обложка (например, «мероприятий недели», даты 21.09-27.09). Дальше события: название, дата и время, место, цена, описание.',
-  kino: 'Первая строка — обложка. Дальше фильмы: название, «Премьера: …», описание.',
-  com: 'Первая строка — обложка. Дальше карточки: заголовок и текст.',
+  int: 'Первый блок — заголовок обложки. Дальше карточки: вопрос первой строкой, ниже ответ.',
+  zav: 'Первый блок — обложка. Дальше заведения: название, строка с адресом (📍 или «ул.»), описание.',
+  new: 'Первый блок — обложка. Дальше места: название, адрес (📍 или «ул.»), описание.',
+  fav: 'Первый блок — обложка. Дальше места: название и пара предложений о нём.',
+  ev: 'Первый блок — обложка (например, «мероприятий недели», даты 21.09-27.09). Дальше события: название, дата и время, место, цена, описание.',
+  kino: 'Первый блок — обложка. Дальше фильмы: название, «Премьера: …», описание.',
+  com: 'Первый блок — обложка. Дальше карточки: заголовок и текст.',
 };
 const MAGIC_EXAMPLE = {
-  int: 'Шеф о своём первом ресторане\nИнтервью\n\nКак всё началось?\nС маленькой кухни у друзей…\n\nЧто дальше?\nВторой ресторан весной.',
-  zav: 'Где позавтракать в Душанбе\nпять мест с лучшими сырниками\n\nКофейня «Зерно»\n📍 ул. Рудаки, 45\nСырники с соленой карамелью и спешелти-кофе.\n\nБулочная «Хлеб»\n📍 пр. Исмоили Сомони, 12\nТёплые круассаны с 8 утра.',
+  int: 'Шеф о своём первом ресторане\nИнтервью\n//\nКак всё началось?\nС маленькой кухни у друзей…\n//\nЧто дальше?\nВторой ресторан весной.',
+  zav: 'Где позавтракать в Душанбе\nпять мест с лучшими сырниками\n//\nКофейня «Зерно»\n📍 ул. Рудаки, 45\nСырники с соленой карамелью и спешелти-кофе.\n//\nБулочная «Хлеб»\n📍 пр. Исмоили Сомони, 12\nТёплые круассаны с 8 утра.',
 };
 const MONTHS = 'январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр';
 // \b в JS не видит кириллицу: слово — через \p{L}. Без lookbehind (?<…) —
@@ -4449,6 +4450,7 @@ const RE = {
   badge: /^\s*(?:премьер|в кино|в прокате|старт|с\s+\d{1,2}\s)/iu,
   range: /\d{1,2}\.\d{1,2}\s*[-–—]\s*\d{1,2}\.\d{1,2}/,
   emoji: /^\s*\p{Extended_Pictographic}\uFE0F?\s*/u,
+  split: /^\/\/+\s*/,   // «//» в начале строки — новая карточка
 };
 /* Адрес — ключевое слово и номер дома («наб. Рудаки, 5»), а не просто «Набережная». */
 const looksAddress = t => /^\s*📍/u.test(t) || (RE.address.test(t) && /\d/.test(t));
@@ -4466,16 +4468,6 @@ function magicLines(text, runs) {
     pos += raw.length + 1;
   }
   return lines;
-}
-
-function lineBold(l) {
-  let letters = 0;
-  for (let i = 0; i < l.text.length; i++) {
-    if (/\s/.test(l.text[i])) continue;
-    if (!(l.flags[i] & BOLD)) return false;
-    letters++;
-  }
-  return letters > 1;
 }
 
 /* Убрать «1.» / маркер списка спереди (с флагами). */
@@ -4502,61 +4494,55 @@ function joinLines(lines) {
   return { text, flags };
 }
 
-function magicItemsFrom(lines, rubric) {
-  // как узнали заголовок пункта: 'num' — «1.», 'bold' — жирный, 'q' — вопрос,
-  // 'title' — короткая строка после пустой (подборки); false — не заголовок
-  const headKind = (l, i) => {
-    if (!l.text) return false;
-    if (RE.numbered.test(l.text)) return 'num';
-    if (lineBold(l)) return 'bold';
-    if (rubric === 'int') return /[?？]\s*$/.test(l.text) && l.text.length <= 160 ? 'q' : false;
-    const prevBlank = i === 0 || !lines[i - 1].text;
-    const next = lines[i + 1];
-    return prevBlank && next && next.text && l.text.length <= 70 && !/[.!…:;,]$/.test(l.text) &&
-      !looksAddress(l.text) ? 'title' : false;
+/* «Название — описание» одной строкой. */
+const DASH_HEAD = /^(.{2,50}?)\s+[—–-]\s+(.{12,})$/;
+
+/* Строки → блоки-слайды: разделитель — две пустые строки подряд или «//».
+   Одиночные пустые строки остаются внутри блока (абзацы). */
+function magicBlocks(lines) {
+  const blocks = [];
+  let cur = [], blank = 0;
+  const close = () => {
+    while (cur.length && !cur[cur.length - 1].text) cur.pop();
+    if (cur.length) blocks.push(cur);
+    cur = []; blank = 0;
   };
-  const heads = lines.map((l, i) => headKind(l, i));
-  const first = heads.findIndex(Boolean);
-  let coverLines = (first < 0 ? [] : lines.slice(0, first)).filter(l => l.text);
-  const items = [];
-  if (first >= 0) {
-    let cur = null;
-    lines.slice(first).forEach((l, k) => {
-      if (heads[first + k]) { cur = { head: cutLead(l), kind: heads[first + k], rest: [] }; items.push(cur); }
-      else cur.rest.push(l);
-    });
-  }
-  // обложки не нашлось, а первый «пункт» в самом начале — скорее это она:
-  // заголовок без текста (жирные строки из Docs) или короткая шапка из 1–2
-  // строк без адреса, даты и цены
-  if (!coverLines.length && items.length >= 2 && items[0].kind !== 'num') {
-    const restText = items[0].rest.filter(l => l.text);
-    const plainShort = restText.length <= 2 && restText.every(l => l.text.length <= 90 &&
-      !looksAddress(l.text) && !RE.date.test(l.text) && !RE.price.test(l.text) && !RE.badge.test(l.text));
-    if (!restText.length || (items[0].kind === 'title' && plainShort)) {
-      coverLines = [items[0].head, ...restText];
-      items.shift();
+  for (const l of lines) {
+    const m = l.text.match(RE.split);
+    if (m) {
+      close();
+      const t = { text: l.text.slice(m[0].length), flags: l.flags.slice(m[0].length) };
+      if (t.text) cur.push(t);
+      continue;
     }
+    if (!l.text) {
+      if (++blank >= 2) close();
+      else if (cur.length) cur.push(l);
+      continue;
+    }
+    blank = 0;
+    cur.push(l);
   }
-  return { coverLines, items };
+  close();
+  return blocks;
 }
 
 /* Разбор текста под рубрику → { cover: {fields, fmt}, items: [{layout, fields, fmt}] }. */
 function parseCarouselText(text, runs, rubricId, opts = {}) {
   const r = RUBRIC_BY_ID[rubricId] || RUBRICS[0];
-  const lines = magicLines(text, runs);
-  let { coverLines, items } = magicItemsFrom(lines, rubricId);
-  if (!items.length) {
-    // без явных пунктов: блоки через пустую строку, первый — обложка
-    const blocks = [];
-    let cur = [];
-    for (const l of lines) { if (l.text) cur.push(l); else if (cur.length) { blocks.push(cur); cur = []; } }
-    if (cur.length) blocks.push(cur);
-    coverLines = blocks.length > 1 || (blocks[0] && blocks[0].length <= 2) ? (blocks.shift() || []) : [];
-    items = blocks.map(b => (b.length > 1 && b[0].text.length <= 80
-      ? { head: cutLead(b[0]), rest: b.slice(1) }
-      : { head: null, rest: b }));
-  }
+  const blocks = magicBlocks(magicLines(text, runs));
+  const filled = b => b.filter(l => l.text);
+  // первый блок — обложка; один короткий блок — тоже обложка, длинный — карточка
+  const coverLines = blocks.length > 1 || (blocks[0] && filled(blocks[0]).length <= 2)
+    ? filled(blocks.shift() || []) : [];
+  // первая строка — заголовок, если не слишком длинная; карточка из одной
+  // строки — заголовок, только если короткая или «Название — описание»
+  const headMax = rubricId === 'int' ? 160 : 80;
+  const isHead = b => b[0].text.length <= headMax && (filled(b).length > 1 ||
+    b[0].text.length <= 50 || DASH_HEAD.test(b[0].text));
+  const items = blocks.map(b => (isHead(b)
+    ? { head: cutLead(b[0]), rest: b.slice(1) }
+    : { head: null, rest: b }));
 
   const cover = { fields: {}, fmt: {} };
   const coverKind = r.slides[0];
@@ -4578,7 +4564,7 @@ function parseCarouselText(text, runs, rubricId, opts = {}) {
     let rest = it.rest.slice();
     // «Название — описание» одной строкой
     if (head && rubricId !== 'int') {
-      const m = head.text.match(/^(.{2,50}?)\s+[—–-]\s+(.{12,})$/);
+      const m = head.text.match(DASH_HEAD);
       if (m) {
         const cut = head.text.length - m[2].length;
         rest.unshift({ text: m[2], flags: head.flags.slice(cut) });
@@ -4689,7 +4675,7 @@ function openMagicSheet() {
 
   let timer = 0;
   const refresh = () => {
-    hint.textContent = MAGIC_HINTS[rubric];
+    hint.textContent = MAGIC_SPLIT + ' ' + MAGIC_HINTS[rubric];
     numberRow.hidden = rubric !== 'int';
     setPlaceholder();
     syncEmpty();

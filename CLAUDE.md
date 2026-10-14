@@ -291,9 +291,10 @@ against the Figma screenshots and matches (line breaks differ only where
   screen only — deliberately not in the editor): pick a rubric
   (`MAGIC_RUBRICS`), paste text (rich, so bold headings from Docs survive),
   `parseCarouselText(text, runs, rubricId, opts)` → `{cover, items}`:
-  `magicItemsFrom` splits on numbered/bulleted/bold/«?»-question heads or
-  blank lines; the first block becomes the cover (heuristics for a short
-  title + subtitle); per rubric `RE` patterns pull 📍 addresses
+  `magicBlocks` splits **only** on two blank lines in a row or a line
+  starting with `//` (text after it opens the next card; single blank lines
+  stay inside a card as paragraphs); the first block becomes the cover,
+  a card's first line its title (`cutLead` strips «1.»); per rubric `RE` patterns pull 📍 addresses
   (`looksAddress`: keyword + digit), dates, places, prices, «Премьера:»
   badges; int numbers titles «01. …» (`opts.number`). Word boundaries are
   `W0`/`W1` with `\p{L}` — **no `\b` (ASCII-only) and no lookbehind** (iOS
