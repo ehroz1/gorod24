@@ -59,6 +59,8 @@ const RUBRICS = [
     slides: ['post'], card: 'post', layouts: ['post'] },
   { id: 'reels', name: 'Рилс', desc: 'Обложка для рилс, 1080×1920',
     slides: ['reels'], card: 'reels', layouts: ['reels'] },
+  { id: 'weather', name: 'Погода', desc: 'Сторис: погода и курсы валют, 1080×1920',
+    slides: ['weather'], card: 'weather', layouts: ['weather'] },
 ];
 const RUBRIC_BY_ID = Object.fromEntries(RUBRICS.map(r => [r.id, r]));
 
@@ -75,7 +77,23 @@ const FIELD_INFO = {
   place: { label: 'Место', multiline: true, group: 'body', hint: '📍 добавится сам', optional: true },
   price: { label: 'Цена', group: 'body', hint: '💵 добавится сам', optional: true },
   badge: { label: 'Плашка', group: 'body', hint: 'например «Премьера: 17 сентября»', optional: true },
+  // погода (сторис)
+  day: { label: 'Дата', group: 'title', hint: 'ставится сама, можно поправить' },
+  wicon: { label: 'Эмодзи погоды', group: 'body' },
+  tMorn: { label: 'Утром', group: 'body', hint: '«+» добавится сам' },
+  tDay: { label: 'Днем', group: 'body', hint: '«+» добавится сам' },
+  tEve: { label: 'Вечером', group: 'body', hint: '«+» добавится сам' },
+  ficon: { label: 'Эмодзи курсов', group: 'body' },
+  curA: { label: 'Валюта, строка 1', group: 'body' },
+  rateA: { label: 'Курс, строка 1', group: 'body' },
+  curB: { label: 'Валюта, строка 2', group: 'body' },
+  rateB: { label: 'Курс, строка 2', group: 'body' },
+  curC: { label: 'Валюта, строка 3', group: 'body' },
+  rateC: { label: 'Курс, строка 3', group: 'body' },
 };
+// быстрый выбор эмодзи в форме погоды
+const WEATHER_ICONS = ['☀️', '🌤️', '⛅', '🌥️', '☁️', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '🌫️', '💨', '🌈'];
+const MONEY_ICONS = ['💵', '💰', '💸', '💶', '💱', '🏦'];
 const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
   'new-card': { title: 'Название заведения', body: 'Описание (белая плашка)' },
@@ -356,7 +374,7 @@ async function deleteProjectMedia(projectId, keepIds = null) {
 
 /* ------------------------------------------------------ бренд и шрифты */
 
-const assets = { logoWhite: null, logoBlack: null, stack: null };
+const assets = { logoWhite: null, logoBlack: null, logoMass: 0.5, stack: null, partner: id => partnerAsset(id) };
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -414,6 +432,7 @@ async function setLogoFrom(src) {
   const trimmed = trimTransparent(img);
   assets.logoWhite = tint(trimmed, '#ffffff');
   assets.logoBlack = tint(trimmed, '#000000');
+  assets.logoMass = inkMass(trimmed);
   const img2 = h('img', { src: assets.logoWhite.toDataURL('image/png'), alt: '' });
   el.brandLogo.replaceChildren(img2);
 }
@@ -429,6 +448,7 @@ async function loadBrand() {
     }
     if (BUNDLED_BRAND.logo) await setLogoFrom(BUNDLED_BRAND.logo).catch(() => {});
   })());
+  jobs.push(loadPartners());
   await Promise.all(jobs);
 }
 
@@ -525,6 +545,177 @@ function afterBrandChange() {
   syncFontStretch();
   if (state.screen === 'home') renderHome();
   else { invalidateThumbs(); refreshEditor(); }
+}
+
+/* ------------------------------------------------- партнёры (коллаборация) */
+/*
+ * Логотипы для коллабораций на обложках (opts.collab, см. drawCoverLogo в
+ * render.js). Встроенные — все логотипы бренд-кита WE media group
+ * (BUNDLED_PARTNERS, brand/partners/), свои — загружаются в шторке и лежат
+ * в IndexedDB под ключом partner/<id> как { name, blob }. Каждый логотип
+ * превращается в маску (как наш): по правилам ко-брендинга оба знака одного
+ * цвета. В проекте хранится только id: чужой логотип, загруженный на другом
+ * устройстве, здесь не найдётся — обложка покажет один наш логотип.
+ */
+const partners = new Map();   // id → { id, name, user, asset: {white, black, mass, preview} | null }
+const PARTNER_PREFIX = 'partner/';
+const PARTNER_SIDE = 1000;    // длинная сторона растра маски
+
+function partnerAsset(id) {
+  const p = partners.get(id);
+  return p ? p.asset : null;
+}
+
+/* Доля закрашенных пикселей знака (в его рамке) — «плотность» для баланса. */
+function inkMass(canvas) {
+  let data;
+  try { data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data; } catch { return 0.5; }
+  let sum = 0;
+  for (let i = 3; i < data.length; i += 4) sum += data[i];
+  return sum / 255 / (canvas.width * canvas.height);
+}
+
+/* Картинка → белая маска с обрезанными полями. У непрозрачной картинки
+   (JPG, PNG на подложке) знак — всё, что отличается от цвета фона в углах. */
+function logoMask(img) {
+  let [iw, ih] = mediaSize(img);
+  if (!iw || !ih) { iw = PARTNER_SIDE; ih = PARTNER_SIDE / 2; }
+  const s = PARTNER_SIDE / Math.max(iw, ih);
+  const w = Math.max(1, Math.round(iw * s)), hh = Math.max(1, Math.round(ih * s));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = hh;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, hh);
+  const id = ctx.getImageData(0, 0, w, hh);
+  const d = id.data;
+  let clear = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 200) clear++;
+  if (clear < w * hh * 0.01) {
+    const bg = [0, 0, 0];
+    const corners = [0, w - 1, (hh - 1) * w, (hh - 1) * w + w - 1];
+    for (const k of corners) for (let ch = 0; ch < 3; ch++) bg[ch] += d[k * 4 + ch] / corners.length;
+    for (let i = 0; i < d.length; i += 4) {
+      const diff = Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2]));
+      d[i + 3] = Math.round(Math.min(Math.max((diff - 30) / 90, 0), 1) * 255);
+    }
+  }
+  for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255;
+  ctx.putImageData(id, 0, 0);
+  return trimTransparent(c);
+}
+
+async function partnerFrom(src) {
+  const img = await loadImage(src);
+  const white = logoMask(img);
+  const mass = inkMass(white);
+  if (mass < 0.005 || mass > 0.98) throw new Error('empty logo');
+  return { white, black: tint(white, '#000000'), mass, preview: white.toDataURL('image/png') };
+}
+
+async function loadPartners() {
+  const jobs = [];
+  for (const b of (typeof BUNDLED_PARTNERS !== 'undefined' ? BUNDLED_PARTNERS : [])) {
+    const p = { id: b.id, name: b.name, user: false, asset: null };
+    partners.set(b.id, p);
+    jobs.push(partnerFrom(b.src).then(a => { p.asset = a; }).catch(() => partners.delete(b.id)));
+  }
+  const keys = (await idbKeys()) || [];
+  for (const key of keys) {
+    if (typeof key !== 'string' || !key.startsWith(PARTNER_PREFIX)) continue;
+    jobs.push(idbGet(key).then(async rec => {
+      if (!rec || !(rec.blob instanceof Blob)) return;
+      const url = URL.createObjectURL(rec.blob);
+      try {
+        partners.set(key.slice(PARTNER_PREFIX.length),
+          { id: key.slice(PARTNER_PREFIX.length), name: rec.name || 'Партнёр', user: true, asset: await partnerFrom(url) });
+      } catch { /* битый файл — пропускаем */ }
+      URL.revokeObjectURL(url);
+    }));
+  }
+  await Promise.all(jobs);
+}
+
+function setCollab(id) {
+  const slide = currentSlide();
+  pushUndo();
+  if (id) slide.opts.collab = id;
+  else delete slide.opts.collab;
+  commit({ panel: true });
+}
+
+function uploadPartner() {
+  const picker = el.brandPicker;
+  picker.accept = 'image/png,image/webp,image/svg+xml,image/jpeg';
+  picker.value = '';
+  picker.onchange = async () => {
+    const file = picker.files && picker.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    let asset;
+    try { asset = await partnerFrom(url); } catch { asset = null; }
+    URL.revokeObjectURL(url);
+    if (!asset) { say('Не получилось выделить логотип — нужен PNG с прозрачным фоном, SVG или картинка на ровном фоне'); return; }
+    const id = 'u-' + Date.now().toString(36);
+    const name = (file.name || '').replace(/\.[^.]+$/, '').trim() || 'Партнёр';
+    await idbPut(PARTNER_PREFIX + id, { name, blob: file });
+    partners.set(id, { id, name, user: true, asset });
+    closeSheet();
+    setCollab(id);
+    say('Логотип партнёра добавлен');
+  };
+  picker.click();
+}
+
+async function deletePartner(id) {
+  const p = partners.get(id);
+  if (!p || !p.user) return;
+  await idbDel(PARTNER_PREFIX + id);
+  partners.delete(id);
+  // на слайдах этого проекта убираем ссылку на удалённый логотип
+  let used = false;
+  for (const slide of state.project.slides) if (slide.opts.collab === id) used = true;
+  if (used) {
+    pushUndo();
+    for (const slide of state.project.slides) if (slide.opts.collab === id) delete slide.opts.collab;
+    commit({ panel: true });
+  }
+  say('Логотип «' + p.name + '» удалён');
+  openCollabSheet();
+}
+
+function partnerChip(p) {
+  const chip = h('span', { class: 'partner-chip' });
+  if (p && p.asset) chip.append(h('img', { src: p.asset.preview, alt: '' }));
+  return chip;
+}
+
+function openCollabSheet() {
+  const slide = currentSlide();
+  const cur = slide.opts.collab || null;
+  const opt = (p, label) => {
+    const b = h('button', { type: 'button', class: 'partner-opt' + ((p ? p.id : null) === cur ? ' current' : ''),
+      'aria-pressed': String((p ? p.id : null) === cur) },
+      p ? partnerChip(p) : h('span', { class: 'partner-chip none', text: 'Только наш' }),
+      h('span', { class: 'partner-name', text: label }));
+    b.addEventListener('click', () => { closeSheet(); setCollab(p ? p.id : null); });
+    if (!p || !p.user) return b;
+    const del = iconBtn('trash', 'Удалить логотип «' + p.name + '»', e => { e.stopPropagation(); deletePartner(p.id); }, 'sm partner-del');
+    return h('div', { class: 'partner-cell' }, b, del);
+  };
+  const list = [...partners.values()].filter(p => p.asset);
+  const own = list.filter(p => !p.user), mine = list.filter(p => p.user);
+  const body = h('div', {},
+    h('div', { class: 'sheet-group' }, h('div', { class: 'partner-grid' },
+      opt(null, 'Без партнёра'), own.map(p => opt(p, p.name)))),
+    h('div', { class: 'sheet-group' }, h('h4', { text: 'Свои логотипы' }),
+      mine.length ? h('div', { class: 'partner-grid' }, mine.map(p => opt(p, p.name))) : null,
+      btn('btn btn-outline btn-sm', 'upload-simple', 'Загрузить логотип партнёра', () => uploadPartner()),
+      h('p', { class: 'sheet-note', text: 'PNG с прозрачным фоном или SVG, подойдёт и картинка на ровном фоне. ' +
+        'Логотип станет одноцветным, как наш, а размер подберётся сам: по правилам ко-брендинга ' +
+        'наш логотип слева, между ними линия, знак партнёра не больше чем в 1,6 раза выше нашего. ' +
+        'Свои логотипы хранятся только на этом устройстве.' })));
+  openSheet('Коллаборация', body);
 }
 
 /* ------------------------------------------------------------------ фото */
@@ -1125,7 +1316,17 @@ async function recordVideoSlide(slide, index, onProgress, story = false) {
 /* ------------------------------------------------------------- проекты */
 
 function newSlide(layout) {
-  return { id: newId(), layout, fields: {}, opts: {}, size: {}, photo: null };
+  const L = LAYOUTS[layout];
+  return { id: newId(), layout, fields: L && L.defaults ? L.defaults() : {}, opts: {}, size: {}, photo: null };
+}
+
+/* Перешли на макет со значениями по умолчанию (погода) — заполняем пустые поля. */
+function fillDefaults(slide) {
+  const L = layoutOf(slide);
+  if (!L.defaults) return;
+  for (const [key, value] of Object.entries(L.defaults())) {
+    if (!(slide.fields[key] || '').trim()) slide.fields[key] = value;
+  }
 }
 
 function currentSlide() {
@@ -1394,6 +1595,7 @@ function changeLayout(layout, index = state.current) {
   if (slide.layout === layout) return;
   pushUndo();
   slide.layout = layout;
+  fillDefaults(slide);
   if (!LAYOUTS[layout].photo) { /* фото остаётся в данных — вернётся при смене обратно */ }
   commit({ structure: true });
 }
@@ -1773,9 +1975,9 @@ function autoFit(index = state.current) {
     t = Math.max(FIT_MIN, Math.round((t - 0.02) * 100) / 100);
     b = Math.max(FIT_MIN, Math.round((b - 0.02) * 100) / 100);
   }
-  slide.size = { title: t, body: b };
+  slide.size = Object.assign({}, slide.size, { title: t, body: b });
   if (test(slide.size)) say('Даже мельче не помещается — сократите текст или перенесите часть на новый слайд');
-  else say('Готово: кегль ' + Math.round(b * 100) + '%');
+  else say('Готово: текст уменьшен до ' + Math.round(b * 100) + '% от макета');
   commit({ panel: true });
 }
 
@@ -2856,13 +3058,13 @@ function buildRichField(slide, key, label, ph, info, mode = 'full') {
     mode === 'full' ? fmtButton(editor, 'italic', 'К', 'Курсив (⌘I)') : null,
     fmtButton(editor, 'red', null, 'Красный'),
     fmtButton(editor, 'cream', null, 'Кремовый'),
-    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'),
-    fmtButton(editor, 'plain', 'Обычный', 'Обычный — убрать выделение'));
-  const tip = mode === 'full' ? 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' : 'Выделите слова и выберите цвет или маркер.';
+    fmtButton(editor, 'marker', 'А', 'Маркер — кремовая плашка за словами'));
+  // повторное нажатие на цвет / маркер / Ж / К снимает его — отдельной кнопки «Обычный» нет;
+  // у заголовков подсказки под полем нет
   return h('div', { class: 'field rich-field' },
     h('span', { class: 'field-label' }, h('span', { text: label }), tools),
     editor,
-    h('span', { class: 'field-hint', text: (info.hint ? info.hint + '. ' : '') + tip }));
+    mode === 'full' ? h('span', { class: 'field-hint', text: 'Выделите слова и нажмите «Ж», «К», цвет или маркер.' }) : null);
 }
 
 /* Экранные цвета выделения в поле (на слайде — ACCENT_RED / BRAND_CREAM). */
@@ -2973,7 +3175,7 @@ function syncFmtStates(ed) {
 }
 
 /*
- * Всплывающая панель «Ж · К · Обычный» у выделенного текста — на телефоне.
+ * Всплывающая панель «Ж · К · цвета · маркер» у выделенного текста — на телефоне.
  * В системное меню (Вырезать / Копировать / Вставить) свои пункты не
  * добавить, а наши кнопки над полем оно закрывает. Поэтому своя панель:
  * под выделением (системное меню встаёт над ним, «ручки» — прямо под
@@ -2990,7 +3192,7 @@ const POPUP_ABOVE = 64;   // над выделением: место под си
 function buildFmtPopup() {
   fmtPopup = h('div', { class: 'fmt-pop', role: 'toolbar', 'aria-label': 'Начертание', hidden: true });
   for (const [cmd, text, title] of [['bold', 'Ж', 'Жирный'], ['italic', 'К', 'Курсив'], ['red', null, 'Красный'],
-    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер'], ['plain', 'Обычный', 'Обычный — убрать выделение']]) {
+    ['cream', null, 'Кремовый'], ['marker', 'А', 'Маркер']]) {
     const b = h('button', { type: 'button', class: 'fmt-pop-btn fmt-' + cmd, text, title, 'aria-label': title,
       'aria-pressed': cmd === 'plain' ? null : 'false' });
     if (cmd === 'red' || cmd === 'cream') b.append(h('span', { class: 'fmt-dot', 'aria-hidden': 'true' }));
@@ -3115,7 +3317,8 @@ function buildSlideForm() {
 
   // тексты
   const fields = h('div', { class: 'section' });
-  for (const key of L.fields) fields.append(buildField(slide, key, i));
+  if (L.id === 'weather') fields.append(...buildWeatherFields(slide));
+  else for (const key of L.fields) fields.append(buildField(slide, key, i));
   // доп. блоки «заголовок + текст» (карточка интервью)
   if (L.sections > 1) {
     const n = sectionCount(slide, L);
@@ -3140,7 +3343,7 @@ function buildSlideForm() {
   const look = [];
   // выравнивание и расположение текста (по умолчанию — как в макете)
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
-  look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
+  if (!L.fixedAlign) look.push(h('div', { class: 'look-row' }, h('span', { class: 'lbl', text: 'Выравнивание' }),
     segControl([['left', 'По левому краю', 'text-align-left'], ['center', 'По центру', 'text-align-center'],
       ['right', 'По правому краю', 'text-align-right'], ['justify', 'По ширине', 'text-align-justify']],
     align, v => setTextLayout('align', v), 'Выравнивание текста')));
@@ -3161,6 +3364,18 @@ function buildSlideForm() {
   if (slide.opts.logo && state.project.slides.some(x => logoSpot(x, layoutOf(x)) !== spot)) {
     look.push(btn('btn btn-ghost btn-sm look-all', null, 'Логотип так же на всех слайдах', () => setLogoSpotAll()));
   }
+  // коллаборация: логотип партнёра рядом с нашим (только обложки постов)
+  if (L.collab) {
+    const id = slide.opts.collab;
+    const p = id ? partners.get(id) : null;
+    const pick = h('button', { type: 'button', class: 'btn btn-outline btn-sm collab-pick' },
+      p && p.asset ? partnerChip(p) : iconSpan('plus'), p && p.asset ? p.name : 'Добавить партнёра');
+    pick.addEventListener('click', () => openCollabSheet());
+    look.push(h('div', { class: 'look-row' },
+      h('span', { class: 'lbl-col' }, h('span', { class: 'lbl', text: 'Коллаборация' }),
+        id && !(p && p.asset) ? h('span', { class: 'field-hint', text: 'Логотипа партнёра нет на этом устройстве' }) : null),
+      pick));
+  }
   const tone = switchRow('Фирменный цвет', brandTone(slide), v => setTone(v));
   tone.querySelector('.lbl').prepend(h('span', { class: 'swatch', 'aria-hidden': 'true' }));
   look.push(tone, h('p', { class: 'field-hint tone-hint', text: L.photo && L.shade
@@ -3179,11 +3394,8 @@ function buildSlideForm() {
   }
   if (look.length) root.append(section('Оформление', null, ...look));
 
-  // кегль
-  const groups = new Set(L.fields.map(k => FIELD_INFO[k].group));
-  const sizeRows = [];
-  if (groups.has('title')) sizeRows.push(rangeRow('Заголовок', { min: 50, max: 140, value: Math.round((slide.size.title || 1) * 100), unit: '%', key: 'size-title', onInput: x => setSize('title', x / 100) }));
-  if (groups.has('body')) sizeRows.push(rangeRow('Текст', { min: 50, max: 140, value: Math.round((slide.size.body || 1) * 100), unit: '%', key: 'size-body', onInput: x => setSize('body', x / 100) }));
+  // кегль и межстрочный — в пунктах (единицах макета)
+  const sizeRows = buildSizeRows(slide, i);
   const resetSize = btn('btn btn-ghost btn-sm', null, 'Как в макете', () => {
     pushUndo(); slide.size = {}; commit({ panel: true });
   });
@@ -3202,6 +3414,119 @@ function buildSlideForm() {
     act('btn btn-danger', 'trash', 'Удалить слайд', () => deleteSlide()))));
 
   return root;
+}
+
+/*
+ * Форма погоды (сторис): дата с «Сегодня / Завтра», эмодзи с быстрым
+ * выбором, температура «Утром / Днем / Вечером» и курсы — знак валюты +
+ * число. Подписи «Утром…» на слайде не меняются. Поля — обычные
+ * (slide.fields), так что быстрая правка с превью работает как везде.
+ */
+function buildWeatherFields(slide) {
+  const L = layoutOf(slide);
+  const input = (key, cls = '') => {
+    const c = h('input', { class: 'input ' + cls, type: 'text', placeholder: placeholderFor(L, key),
+      enterkeyhint: 'done', autocomplete: 'off', 'aria-label': FIELD_INFO[key].label });
+    c.value = slide.fields[key] || '';
+    c.dataset.field = key;
+    c.addEventListener('input', () => { setField(key, c.value); syncChips(); });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter') c.blur(); });
+    return c;
+  };
+  const chipSets = [];
+  const syncChips = () => chipSets.forEach(([key, list]) =>
+    list.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.value === (slide.fields[key] || '').trim())));
+  // кнопки-варианты: нажали — значение в поле и на слайд
+  const chips = (key, control, options, cls = '') => {
+    const list = h('div', { class: 'chips ' + cls });
+    for (const [label, value] of options) {
+      const b = h('button', { type: 'button', class: 'chip-btn', text: label });
+      b.dataset.value = value;
+      b.addEventListener('click', () => { control.value = value; setField(key, value); syncChips(); });
+      list.append(b);
+    }
+    chipSets.push([key, list]);
+    return list;
+  };
+  const tomorrow = new Date(Date.now() + 864e5);
+  const day = input('day');
+  const wicon = input('wicon', 'wx-emoji');
+  const ficon = input('ficon', 'wx-emoji');
+  const out = [
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Дата' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.day.hint })),
+      day,
+      chips('day', day, [['Сегодня', ruDayMonth()], ['Завтра', ruDayMonth(tomorrow)]])),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Погода' }),
+        h('span', { class: 'muted small', text: FIELD_INFO.tMorn.hint })),
+      h('div', { class: 'wx-pick' }, wicon, chips('wicon', wicon, WEATHER_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid' }, WEATHER_ROWS.map(([key, label]) =>
+        [h('span', { class: 'wx-lbl', text: label }), input(key)]).flat())),
+    h('div', { class: 'field' },
+      h('span', { class: 'field-label' }, h('span', { text: 'Курсы валют' })),
+      h('div', { class: 'wx-pick' }, ficon, chips('ficon', ficon, MONEY_ICONS.map(e => [e, e]), 'wx-emojis')),
+      h('div', { class: 'wx-grid wx-rates' }, WEATHER_RATES.map(([cur, rate]) =>
+        [input(cur, 'wx-cur'), input(rate)]).flat())),
+  ];
+  syncChips();
+  return out;
+}
+
+/*
+ * «Размер текста»: кегль и межстрочный интервал заголовка и текста — в
+ * пунктах макета (как в Figma). Хранятся множителями к макету
+ * (slide.size.title / body, titleLead / bodyLead), пункты считаем по
+ * главному полю группы: title / body или L.sizeKeys, иначе первое поле
+ * группы. Кегль и интервал берём из отрисовки (res.texts).
+ */
+const LEAD_MIN = 0.5, LEAD_MAX = 2;
+
+function groupMetrics(slide, index) {
+  const L = layoutOf(slide);
+  const c = document.createElement('canvas');
+  c.width = c.height = 4;
+  const env = { assets, photo: null, transform: {}, ghost: true, noText: true, k: 1, cardNo: index >= 0 ? cardNo(index) : 1 };
+  const texts = renderSlide(c.getContext('2d'), slide, env).texts || [];
+  const out = {};
+  for (const group of ['title', 'body']) {
+    const keys = slideFields(slide, L).filter(k => FIELD_INFO[baseKey(k)].group === group);
+    if (!keys.length) continue;
+    const main = (L.sizeKeys && L.sizeKeys[group]) || (keys.includes(group) ? group : null);
+    const t = texts.find(x => x.key === main) || keys.map(k => texts.find(x => x.key === k)).find(Boolean);
+    if (!t) continue;
+    const sc = sizeScale(slide, group), lm = leadScale(slide, group);
+    out[group] = { size: t.size / sc, lead: t.lead / (sc * lm) };
+  }
+  return out;
+}
+
+function buildSizeRows(slide, index) {
+  const m = groupMetrics(slide, index);
+  const rows = [];
+  for (const [group, title] of [['title', 'Заголовок'], ['body', 'Текст']]) {
+    const g = m[group];
+    if (!g) continue;
+    const sc = () => sizeScale(slide, group);
+    const leadPt = () => g.lead * sc() * leadScale(slide, group);
+    const leadRow = rangeRow('Интервал', { min: Math.round(g.lead * sc() * LEAD_MIN), max: Math.round(g.lead * sc() * LEAD_MAX),
+      value: Math.round(leadPt()), unit: ' пт', key: 'lead-' + group,
+      onInput: x => setSize(group + 'Lead', x / (g.lead * sc())) });
+    // кегль меняется — интервал в пунктах растёт вместе с ним (множитель тот же)
+    const syncLead = () => {
+      const input = leadRow.querySelector('input');
+      input.min = Math.round(g.lead * sc() * LEAD_MIN);
+      input.max = Math.round(g.lead * sc() * LEAD_MAX);
+      input.value = Math.round(leadPt());
+      leadRow.querySelector('output').textContent = input.value + ' пт';
+    };
+    const sizeRow = rangeRow('Кегль', { min: Math.round(g.size * 0.5), max: Math.round(g.size * 1.4),
+      value: Math.round(g.size * sc()), unit: ' пт', key: 'size-' + group,
+      onInput: x => { setSize(group, x / g.size); syncLead(); } });
+    rows.push(h('div', { class: 'size-sub', text: title }), sizeRow, leadRow);
+  }
+  return rows;
 }
 
 function buildPhotoSection(slide) {
@@ -4057,12 +4382,12 @@ function openHelp() {
     </ul>
     <h4>Жирный, курсив, цвет, выравнивание</h4>
     <ul>
-      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный), «К» (курсив) или «Обычный». На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
-      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает, «Обычный» — снимает всё.</li>
+      <li>В полях «Текст» и «Подзаголовок» выделите слова и нажмите «Ж» (жирный) или «К» (курсив), повторное нажатие снимает. На компьютере — <kbd>⌘B</kbd> / <kbd>⌘I</kbd>.</li>
+      <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает.</li>
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
       <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
-      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К · Обычный» и цвета.</li>
+      <li>На телефоне при выделении текста под ним всплывает панель «Ж · К», цвета и маркер.</li>
     </ul>
     <h4>Если текст не помещается или плохо виден</h4>
     <p>Под превью появится «Текст не помещается» и жёлтая точка на миниатюре. «Уместить» уменьшит кегль, пока текст не влезет, или подвиньте ползунки «Размер текста».</p>
@@ -4088,27 +4413,28 @@ function openHelp() {
  * «Собрать карусель из текста» — кнопка только на стартовом экране. Вставили
  * текст (из Заметок, Docs, Telegram — жирный сохраняется) → обложка и
  * карточки рубрики заполнены. Разбор:
- *  - строки до первого пункта — обложка (заголовок, подзаголовок);
- *  - пункт начинается со строки-заголовка: «1.» / «1)», жирной строки,
- *    вопроса (интервью) или короткой строки после пустой (подборки);
- *  - в пункте: адрес (📍, «ул.»…), дата и время, место, цена, «Премьера…» —
- *    по рубрике; остальное — текст карточки.
- * Если пунктов не нашлось — каждый абзац (через пустую строку) — карточка.
+ *  - слайды разделяют две пустые строки подряд или строка «//»
+ *    (текст после «//» — уже начало следующей карточки);
+ *  - первый блок — обложка (заголовок, подзаголовок);
+ *  - в карточке первая строка — заголовок, дальше: адрес (📍, «ул.»…),
+ *    дата и время, место, цена, «Премьера…» — по рубрике; остальное
+ *    (одиночные пустые строки — абзацы) — текст карточки.
  */
 const MAGIC_RUBRICS = ['int', 'zav', 'new', 'fav', 'ev', 'kino', 'com'];
 const STORE_MAGIC = 'g24.magic.v1';   // последняя выбранная рубрика и «нумеровать»
+const MAGIC_SPLIT = 'Слайды разделяйте двумя пустыми строками или строкой «//».';
 const MAGIC_HINTS = {
-  int: 'Первая строка — заголовок обложки. Дальше вопросы (с «?», «1.» или жирные) и ответы под ними.',
-  zav: 'Первая строка — обложка. Дальше заведения: название, строка с адресом (📍 или «ул.»), описание.',
-  new: 'Первая строка — обложка. Дальше места: название, адрес (📍 или «ул.»), описание.',
-  fav: 'Первая строка — обложка. Дальше места: название и пара предложений о нём.',
-  ev: 'Первая строка — обложка (например, «мероприятий недели», даты 21.09-27.09). Дальше события: название, дата и время, место, цена, описание.',
-  kino: 'Первая строка — обложка. Дальше фильмы: название, «Премьера: …», описание.',
-  com: 'Первая строка — обложка. Дальше карточки: заголовок и текст.',
+  int: 'Первый блок — заголовок обложки. Дальше карточки: вопрос первой строкой, ниже ответ.',
+  zav: 'Первый блок — обложка. Дальше заведения: название, строка с адресом (📍 или «ул.»), описание.',
+  new: 'Первый блок — обложка. Дальше места: название, адрес (📍 или «ул.»), описание.',
+  fav: 'Первый блок — обложка. Дальше места: название и пара предложений о нём.',
+  ev: 'Первый блок — обложка (например, «мероприятий недели», даты 21.09-27.09). Дальше события: название, дата и время, место, цена, описание.',
+  kino: 'Первый блок — обложка. Дальше фильмы: название, «Премьера: …», описание.',
+  com: 'Первый блок — обложка. Дальше карточки: заголовок и текст.',
 };
 const MAGIC_EXAMPLE = {
-  int: 'Шеф о своём первом ресторане\nИнтервью\n\nКак всё началось?\nС маленькой кухни у друзей…\n\nЧто дальше?\nВторой ресторан весной.',
-  zav: 'Где позавтракать в Душанбе\nпять мест с лучшими сырниками\n\nКофейня «Зерно»\n📍 ул. Рудаки, 45\nСырники с соленой карамелью и спешелти-кофе.\n\nБулочная «Хлеб»\n📍 пр. Исмоили Сомони, 12\nТёплые круассаны с 8 утра.',
+  int: 'Шеф о своём первом ресторане\nИнтервью\n//\nКак всё началось?\nС маленькой кухни у друзей…\n//\nЧто дальше?\nВторой ресторан весной.',
+  zav: 'Где позавтракать в Душанбе\nпять мест с лучшими сырниками\n//\nКофейня «Зерно»\n📍 ул. Рудаки, 45\nСырники с соленой карамелью и спешелти-кофе.\n//\nБулочная «Хлеб»\n📍 пр. Исмоили Сомони, 12\nТёплые круассаны с 8 утра.',
 };
 const MONTHS = 'январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр';
 // \b в JS не видит кириллицу: слово — через \p{L}. Без lookbehind (?<…) —
@@ -4124,6 +4450,7 @@ const RE = {
   badge: /^\s*(?:премьер|в кино|в прокате|старт|с\s+\d{1,2}\s)/iu,
   range: /\d{1,2}\.\d{1,2}\s*[-–—]\s*\d{1,2}\.\d{1,2}/,
   emoji: /^\s*\p{Extended_Pictographic}\uFE0F?\s*/u,
+  split: /^\/\/+\s*/,   // «//» в начале строки — новая карточка
 };
 /* Адрес — ключевое слово и номер дома («наб. Рудаки, 5»), а не просто «Набережная». */
 const looksAddress = t => /^\s*📍/u.test(t) || (RE.address.test(t) && /\d/.test(t));
@@ -4141,16 +4468,6 @@ function magicLines(text, runs) {
     pos += raw.length + 1;
   }
   return lines;
-}
-
-function lineBold(l) {
-  let letters = 0;
-  for (let i = 0; i < l.text.length; i++) {
-    if (/\s/.test(l.text[i])) continue;
-    if (!(l.flags[i] & BOLD)) return false;
-    letters++;
-  }
-  return letters > 1;
 }
 
 /* Убрать «1.» / маркер списка спереди (с флагами). */
@@ -4177,61 +4494,55 @@ function joinLines(lines) {
   return { text, flags };
 }
 
-function magicItemsFrom(lines, rubric) {
-  // как узнали заголовок пункта: 'num' — «1.», 'bold' — жирный, 'q' — вопрос,
-  // 'title' — короткая строка после пустой (подборки); false — не заголовок
-  const headKind = (l, i) => {
-    if (!l.text) return false;
-    if (RE.numbered.test(l.text)) return 'num';
-    if (lineBold(l)) return 'bold';
-    if (rubric === 'int') return /[?？]\s*$/.test(l.text) && l.text.length <= 160 ? 'q' : false;
-    const prevBlank = i === 0 || !lines[i - 1].text;
-    const next = lines[i + 1];
-    return prevBlank && next && next.text && l.text.length <= 70 && !/[.!…:;,]$/.test(l.text) &&
-      !looksAddress(l.text) ? 'title' : false;
+/* «Название — описание» одной строкой. */
+const DASH_HEAD = /^(.{2,50}?)\s+[—–-]\s+(.{12,})$/;
+
+/* Строки → блоки-слайды: разделитель — две пустые строки подряд или «//».
+   Одиночные пустые строки остаются внутри блока (абзацы). */
+function magicBlocks(lines) {
+  const blocks = [];
+  let cur = [], blank = 0;
+  const close = () => {
+    while (cur.length && !cur[cur.length - 1].text) cur.pop();
+    if (cur.length) blocks.push(cur);
+    cur = []; blank = 0;
   };
-  const heads = lines.map((l, i) => headKind(l, i));
-  const first = heads.findIndex(Boolean);
-  let coverLines = (first < 0 ? [] : lines.slice(0, first)).filter(l => l.text);
-  const items = [];
-  if (first >= 0) {
-    let cur = null;
-    lines.slice(first).forEach((l, k) => {
-      if (heads[first + k]) { cur = { head: cutLead(l), kind: heads[first + k], rest: [] }; items.push(cur); }
-      else cur.rest.push(l);
-    });
-  }
-  // обложки не нашлось, а первый «пункт» в самом начале — скорее это она:
-  // заголовок без текста (жирные строки из Docs) или короткая шапка из 1–2
-  // строк без адреса, даты и цены
-  if (!coverLines.length && items.length >= 2 && items[0].kind !== 'num') {
-    const restText = items[0].rest.filter(l => l.text);
-    const plainShort = restText.length <= 2 && restText.every(l => l.text.length <= 90 &&
-      !looksAddress(l.text) && !RE.date.test(l.text) && !RE.price.test(l.text) && !RE.badge.test(l.text));
-    if (!restText.length || (items[0].kind === 'title' && plainShort)) {
-      coverLines = [items[0].head, ...restText];
-      items.shift();
+  for (const l of lines) {
+    const m = l.text.match(RE.split);
+    if (m) {
+      close();
+      const t = { text: l.text.slice(m[0].length), flags: l.flags.slice(m[0].length) };
+      if (t.text) cur.push(t);
+      continue;
     }
+    if (!l.text) {
+      if (++blank >= 2) close();
+      else if (cur.length) cur.push(l);
+      continue;
+    }
+    blank = 0;
+    cur.push(l);
   }
-  return { coverLines, items };
+  close();
+  return blocks;
 }
 
 /* Разбор текста под рубрику → { cover: {fields, fmt}, items: [{layout, fields, fmt}] }. */
 function parseCarouselText(text, runs, rubricId, opts = {}) {
   const r = RUBRIC_BY_ID[rubricId] || RUBRICS[0];
-  const lines = magicLines(text, runs);
-  let { coverLines, items } = magicItemsFrom(lines, rubricId);
-  if (!items.length) {
-    // без явных пунктов: блоки через пустую строку, первый — обложка
-    const blocks = [];
-    let cur = [];
-    for (const l of lines) { if (l.text) cur.push(l); else if (cur.length) { blocks.push(cur); cur = []; } }
-    if (cur.length) blocks.push(cur);
-    coverLines = blocks.length > 1 || (blocks[0] && blocks[0].length <= 2) ? (blocks.shift() || []) : [];
-    items = blocks.map(b => (b.length > 1 && b[0].text.length <= 80
-      ? { head: cutLead(b[0]), rest: b.slice(1) }
-      : { head: null, rest: b }));
-  }
+  const blocks = magicBlocks(magicLines(text, runs));
+  const filled = b => b.filter(l => l.text);
+  // первый блок — обложка; один короткий блок — тоже обложка, длинный — карточка
+  const coverLines = blocks.length > 1 || (blocks[0] && filled(blocks[0]).length <= 2)
+    ? filled(blocks.shift() || []) : [];
+  // первая строка — заголовок, если не слишком длинная; карточка из одной
+  // строки — заголовок, только если короткая или «Название — описание»
+  const headMax = rubricId === 'int' ? 160 : 80;
+  const isHead = b => b[0].text.length <= headMax && (filled(b).length > 1 ||
+    b[0].text.length <= 50 || DASH_HEAD.test(b[0].text));
+  const items = blocks.map(b => (isHead(b)
+    ? { head: cutLead(b[0]), rest: b.slice(1) }
+    : { head: null, rest: b }));
 
   const cover = { fields: {}, fmt: {} };
   const coverKind = r.slides[0];
@@ -4253,7 +4564,7 @@ function parseCarouselText(text, runs, rubricId, opts = {}) {
     let rest = it.rest.slice();
     // «Название — описание» одной строкой
     if (head && rubricId !== 'int') {
-      const m = head.text.match(/^(.{2,50}?)\s+[—–-]\s+(.{12,})$/);
+      const m = head.text.match(DASH_HEAD);
       if (m) {
         const cut = head.text.length - m[2].length;
         rest.unshift({ text: m[2], flags: head.flags.slice(cut) });
@@ -4364,7 +4675,7 @@ function openMagicSheet() {
 
   let timer = 0;
   const refresh = () => {
-    hint.textContent = MAGIC_HINTS[rubric];
+    hint.textContent = MAGIC_SPLIT + ' ' + MAGIC_HINTS[rubric];
     numberRow.hidden = rubric !== 'int';
     setPlaceholder();
     syncEmpty();
