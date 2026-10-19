@@ -29,7 +29,7 @@ OUT = HERE / "index.html"
 # какие символы оставляем в шрифтах: латиница, вся кириллица (с казахскими,
 # таджикскими, узбекскими буквами), пунктуация, знаки валют
 SUBSET_UNICODES = (
-    "U+0020-007E,U+00A0-00FF,U+02BB-02BC,U+0400-04FF,U+2010-2027,U+2030-203A,"
+    "U+0020-007E,U+00A0-00FF,U+0180-02AF,U+02BB-02BC,U+0400-04FF,U+2010-2027,U+2030-203A,"
     "U+2116,U+2122,U+20B8,U+20BD,U+2212,U+2190-2193"
 )
 
@@ -191,6 +191,17 @@ def main() -> int:
         brand[key] = data_url(found) if found else None
         print(f"{key:9s}: {found.name if found else '— нет файла'}")
 
+    # логотипы партнёров для коллабораций на обложках (brand/partners/,
+    # порядок и названия — partners.json; файлы — из ehroz1/wemedia-group-branding)
+    partners = []
+    plist = BRAND / "partners" / "partners.json"
+    if plist.exists():
+        for p in json.loads(plist.read_text(encoding="utf-8")):
+            f = BRAND / "partners" / p["file"]
+            if f.exists():
+                partners.append({"id": p["id"], "name": p["name"], "src": data_url(f)})
+    print(f"партнёров: {len(partners)}")
+
     for key, chars in font_missing.items():
         sample = "".join(c for c in chars if c.islower())[:24]
         if sample:
@@ -198,6 +209,7 @@ def main() -> int:
     bundled_js = (
         "const BUNDLED_BRAND = " + json.dumps(brand) + ";\n"
         "const BUNDLED_FONTS = " + json.dumps(bundled) + ";\n"
+        "const BUNDLED_PARTNERS = " + json.dumps(partners, ensure_ascii=False) + ";\n"
         # каких букв нет в шрифтах — приложение предупреждает под полем
         "const FONT_MISSING = " + json.dumps(font_missing, ensure_ascii=False) + ";\n"
         "const BUILD_ID = '__BUILD_ID__';\n"

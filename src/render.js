@@ -349,7 +349,7 @@ function recordTextHit(b, x, capTop, align, boxW, color) {
   const top = capTop - b.size * 0.12;
   const bottom = capTop + b.height + b.size * 0.24;
   textHits.push({ key: b.key, x: x0, y: top, w: Math.max(0, x1 - x0), h: bottom - top,
-    font: b.st.font, size: b.size, color, ghost: Boolean(b.ghost) });
+    font: b.st.font, size: b.size, lead: b.lead, group: b.group, color, ghost: Boolean(b.ghost) });
 }
 
 /* Строка по кускам: смена начертания / цвета, маркер и (при выравнивании
@@ -540,6 +540,81 @@ function drawLogo(ctx, env, box, color) {
   ctx.drawImage(logo, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
 }
 
+/*
+ * Коллаборация (opts.collab — id партнёра; только обложки постов, L.collab):
+ * наш логотип, разделитель и логотип партнёра в один ряд. Правила — раздел
+ * «Ко-брендинг» бренд-кита WE media group (ehroz1/wemedia-group-branding,
+ * edubridge-guide.pdf), пересчитанные на наш знак:
+ *  - наш логотип первым, слева (в наших каналах — так);
+ *  - разделитель — линия 2 px на 1080 (у нас 3 единицы), отступ до логотипов
+ *    2X, X = 11 % ширины нашего логотипа; высота — 1× нашего знака (в гайде
+ *    1,5×, но так линия слишком длинная);
+ *  - в паре оба логотипа на 25 % меньше одиночного (COLLAB_SCALE);
+ *  - баланс по оптической массе, знак партнёра не выше 1,6× нашего;
+ *  - оба логотипа одного цвета: партнёр — такая же маска, как наш.
+ * Ряд встаёт в ту же точку, что и одиночный логотип: по вертикали — центр
+ * нашего знака на прежнем месте, по горизонтали — к тому же краю (или центру).
+ * env.assets.partner(id) → { white, black, mass } или null (ещё грузится /
+ * чужой логотип есть только на другом устройстве — тогда рисуем один наш).
+ */
+const COLLAB_LINE = 3;          // толщина разделителя
+const COLLAB_LINE_K = 1;        // высота разделителя — в высотах нашего знака (в гайде 1,5 — у нас вышло слишком длинно)
+const COLLAB_SCALE = 0.75;      // в паре оба логотипа на 25 % меньше одиночного — иначе ряд занимает много места
+const COLLAB_X = 0.11;          // X — доля ширины нашего логотипа
+const COLLAB_GAP_X = 2;         // отступ от разделителя до логотипов — 2X
+const COLLAB_MAX_K = 1.6;       // партнёр не выше 1,6× нашего знака
+const COLLAB_MIN_K = 0.45;      // и не мельче (очень плотный знак иначе превращается в точку)
+const COLLAB_MAX_W = 3.6;       // ширина партнёра — не больше 3,6 высоты нашего знака
+const COLLAB_LINE_ALPHA = 0.6;  // линия спокойнее логотипов (в гайде она серая)
+
+function collabPartner(slide, L, env) {
+  if (!L.collab || !env.assets.logoWhite) return null;
+  const id = slide.opts && slide.opts.collab;
+  return id && env.assets.partner ? env.assets.partner(id) : null;
+}
+
+/* Размеры ряда. «Оптическая масса» = площадь рамки знака × √(доля краски):
+   тонкий контурный знак весит меньше такого же по размеру плотного, но не
+   пропорционально краске — иначе тонкие надписи раздувались бы. */
+function collabSizes(env, def, p) {
+  const our = env.assets.logoWhite;
+  const s = Math.min(def.w / our.width, def.h / our.height) * COLLAB_SCALE;
+  const ow = our.width * s, oh = our.height * s;
+  const a = p.white.width / p.white.height;
+  const oMass = (ow * oh) * Math.sqrt(env.assets.logoMass || 0.5);
+  let ph = Math.sqrt(oMass / (a * Math.sqrt(Math.max(p.mass, 0.02))));
+  ph = Math.min(Math.max(ph, COLLAB_MIN_K * oh), COLLAB_MAX_K * oh);
+  if (ph * a > COLLAB_MAX_W * oh) ph = COLLAB_MAX_W * oh / a;
+  const gap = COLLAB_GAP_X * COLLAB_X * ow;
+  const pw = ph * a;
+  return { ow, oh, pw, ph, gap, lineH: COLLAB_LINE_K * oh, w: ow + 2 * gap + COLLAB_LINE + pw };
+}
+
+/* Логотип обложки: один наш или ряд «наш | партнёр». def — рамка логотипа в макете. */
+function drawCoverLogo(ctx, env, slide, L, def, color) {
+  const p = collabPartner(slide, L, env);
+  if (!p) { drawLogo(ctx, env, logoBox(slide, L, def), color); return; }
+  const g = collabSizes(env, def, p);
+  const spot = logoSpot(slide, L);
+  let x, cy;
+  if (spot === (L.logo || 'tr')) {
+    x = spot[1] === 'l' ? def.x : spot[1] === 'c' ? def.x + def.w / 2 - g.w / 2 : def.x + def.w - g.w;
+    cy = def.y + def.h / 2;
+  } else {
+    const b = logoBox(slide, L, { x: 0, y: 0, w: g.w, h: def.h });
+    x = b.x; cy = b.y + def.h / 2;
+  }
+  const black = color === BLACK;
+  const our = black ? env.assets.logoBlack : env.assets.logoWhite;
+  ctx.drawImage(our, x, cy - g.oh / 2, g.ow, g.oh);
+  ctx.save();
+  ctx.globalAlpha = COLLAB_LINE_ALPHA;
+  ctx.fillStyle = color;
+  ctx.fillRect(x + g.ow + g.gap, cy - g.lineH / 2, COLLAB_LINE, g.lineH);
+  ctx.restore();
+  ctx.drawImage(black ? p.black : p.white, x + g.ow + 2 * g.gap + COLLAB_LINE, cy - g.ph / 2, g.pw, g.ph);
+}
+
 // Стрелка «листай дальше»: линия 61px, толщина 10, скруглённые концы,
 // наконечник-«галочка» под 45°.
 const ARROW_X = 1285;   // левый край стрелки
@@ -651,13 +726,45 @@ function drawPhotoQuad(ctx, env, q, fallback = BLACK) {
 const STACK = { x: 182.63, y: 382.83, w: 1069.46, h: 802.6 };
 const STACK_PHOTO = { cx: 760.1, cy: 784.6, w: 865.43, h: 593.76, deg: 5.65, bleed: 2 };
 
+/* Сдвиг и размер рамки под фото (стопка, полароид) на слайде:
+   slide.opts.frame = {x, y, s} — смещение в единицах макета и масштаб вокруг
+   центра рамки. Пусто / нули — как в макете (код рисует ровно то же, что раньше). */
+const FRAME_SHIFT_MAX = 600;
+const FRAME_SCALE_MIN = 0.6, FRAME_SCALE_MAX = 1.3;
+
+function frameOf(slide) {
+  const f = slide.opts && slide.opts.frame;
+  if (!f) return null;
+  const lim = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
+  const x = lim(f.x, -FRAME_SHIFT_MAX, FRAME_SHIFT_MAX);
+  const y = lim(f.y, -FRAME_SHIFT_MAX, FRAME_SHIFT_MAX);
+  const s = f.s == null ? 1 : lim(f.s, FRAME_SCALE_MIN, FRAME_SCALE_MAX);
+  return x || y || s !== 1 ? { x, y, s } : null;
+}
+
+/* Точка макета (px, py) после сдвига рамки с центром (cx, cy). */
+function framePoint(f, cx, cy, px, py) {
+  return f ? [cx + (px - cx) * f.s + f.x, cy + (py - cy) * f.s + f.y] : [px, py];
+}
+
+/* Повёрнутая область фото после сдвига рамки (размеры и поля — с масштабом). */
+function frameQuad(f, cx, cy, q) {
+  if (!f) return q;
+  const [x, y] = framePoint(f, cx, cy, q.cx, q.cy);
+  const out = Object.assign({}, q, { cx: x, cy: y, w: q.w * f.s, h: q.h * f.s });
+  for (const k of ['side', 'top', 'bottom']) if (k in q) out[k] = q[k] * f.s;
+  return out;
+}
+
+const STACK_CX = STACK.x + STACK.w / 2, STACK_CY = STACK.y + STACK.h / 2;
+const STACK_TEXT_GAP = 1268 - (STACK.y + STACK.h);   // от низа стопки до текста
+
 // Полароид мероприятий: фото 627×688 повёрнуто на 0,97°, вокруг рамка
 // (#FCFCFC, поля 26 / 47 сверху / 131 снизу) с мягкой тенью вверх-вправо.
 const POLAROID = { cx: 407.4, cy: 641.2, w: 627.62, h: 687.87, deg: 0.97, bleed: 0.5,
                    side: 26, top: 47, bottom: 131 };
 
-function drawPolaroidFrame(ctx, env) {
-  const q = POLAROID;
+function drawPolaroidFrame(ctx, env, q = POLAROID) {
   const k = env.k || 1;
   ctx.save();
   ctx.translate(q.cx, q.cy);
@@ -736,6 +843,12 @@ const T = {
   kino103: { font: 'title', size: 103, lead: 95, track: -2 },
   kino150: { font: 'title', size: 150, lead: 108, track: -3 },
   body42: { font: 'body', size: 42, track: -2.1 },
+  // Погода (сторис): сняты с готовых сторис 1080×1920 (высота прописных и
+  // ширина строк при Bravo Pro)
+  wday168: { font: 'title', size: 168, lead: 150, track: 0 },
+  wrow108: { font: 'title', size: 108, lead: 121, track: 4 },
+  wrate110: { font: 'title', size: 110, lead: 121, track: 0 },
+  wicon150: { font: 'body', size: 150 },
 };
 
 /* ------------------------------------------------------- поля слайда */
@@ -815,6 +928,18 @@ function sizeScale(slide, group) {
   return s ? Math.min(Math.max(s, 0.4), 1.6) : 1;
 }
 
+/* Межстрочный интервал (ползунок «Межстрочный»): множитель к интервалу
+   макета, slide.size.titleLead / bodyLead; 1 — как в макете. */
+function leadScale(slide, group) {
+  const s = slide.size && slide.size[group + 'Lead'];
+  return s ? Math.min(Math.max(s, 0.5), 2) : 1;
+}
+
+/* Стиль с изменённым межстрочным (st не трогаем — он общий). */
+function withLead(st, mul) {
+  return mul === 1 ? st : Object.assign({}, st, { lead: (st.lead || st.size * INTER_LEAD) * mul });
+}
+
 /* Блок + признак «подсказка» — чтобы рисовать бледным и не считать переполнение. */
 function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform) {
   const f = fieldText(slide, env, key, layout);
@@ -832,8 +957,9 @@ function fieldBlock(ctx, slide, env, layout, key, st, group, maxWidth, transform
     if (runs && t !== text) runs = t.endsWith(text) ? [[t.length - text.length, 0], ...runs] : null;
     text = t;
   }
-  const b = textBlock(ctx, text, st, sizeScale(slide, group), maxWidth, runs);
+  const b = textBlock(ctx, text, withLead(st, leadScale(slide, group)), sizeScale(slide, group), maxWidth, runs);
   b.key = key;
+  b.group = group;
   b.ghost = f.ghost;
   // маркер кремовый; если слайд уже кремовый (фирменный цвет) — белый
   b.markerColor = brandTone(slide) ? WHITE : BRAND_CREAM;
@@ -908,7 +1034,7 @@ function renderCover(ctx, slide, env, L, spec) {
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, spec.shadeTop, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, logoBox(slide, L, spec.logo || LOGO_BOX), WHITE);
+  drawCoverLogo(ctx, env, slide, L, spec.logo || LOGO_BOX, WHITE);
   if (arrowOn(slide, L)) drawArrow(ctx, ink(slide));
   drawBlock(ctx, title, x, items[0].top, ink(slide), align, alphaOf(title));
   drawBlock(ctx, sub, x, items[1].top, ink(slide), align, alphaOf(sub));
@@ -918,7 +1044,8 @@ function renderCover(ctx, slide, env, L, spec) {
 
 function shadeStrength(slide, L) {
   if (!L.shade) return 0;
-  const v = slide.opts && typeof slide.opts.shade === 'number' ? slide.opts.shade : 1;
+  const v = slide.opts && typeof slide.opts.shade === 'number' ? slide.opts.shade
+    : typeof L.shadeDefault === 'number' ? L.shadeDefault : 1;
   return Math.min(Math.max(v, 0), 1);
 }
 
@@ -967,16 +1094,23 @@ function renderFavoriteCard(ctx, slide, env, L) {
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, logoBox(slide, L, { x: 1198, y: 149, w: 152, h: 130 }), BLACK);
-  if (env.assets.stack) ctx.drawImage(env.assets.stack, STACK.x, STACK.y, STACK.w, STACK.h);
-  const photo = drawPhotoQuad(ctx, env, STACK_PHOTO, env.assets.stack ? null : BLACK);
+  const f = frameOf(slide);
+  if (env.assets.stack) {
+    const [x, y] = framePoint(f, STACK_CX, STACK_CY, STACK.x, STACK.y);
+    const s = f ? f.s : 1;
+    ctx.drawImage(env.assets.stack, x, y, STACK.w * s, STACK.h * s);
+  }
+  const photo = drawPhotoQuad(ctx, env, frameQuad(f, STACK_CX, STACK_CY, STACK_PHOTO), env.assets.stack ? null : BLACK);
   if (arrowOn(slide, L)) drawArrow(ctx, BLACK);
   const maxW = 1253;
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
   const logoBelow = logoSpot(slide, L)[0] === 'b';
-  const top = placeIn(body.height, 1268, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
+  // текст — под стопкой: подвинули стопку — полоса текста едет за ней
+  const textTop = f ? Math.max(LOGO_SAFE, framePoint(f, STACK_CX, STACK_CY, 0, STACK.y + STACK.h)[1] + STACK_TEXT_GAP) : 1268;
+  const top = placeIn(body.height, textTop, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
   drawBlock(ctx, body, (W - maxW) / 2, top, BLACK, align, alphaOf(body));
   // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
-  return { overflow: real(body) && (top < 1268 || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
+  return { overflow: real(body) && (top < textTop || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
@@ -1048,7 +1182,7 @@ function renderEventsCover(ctx, slide, env, L) {
 
   const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
   drawShadeFor(ctx, W, H, 882, shadeStrength(slide, L), valign, top + h / 2);
-  drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), WHITE);
+  drawCoverLogo(ctx, env, slide, L, LOGO_BOX, WHITE);
   if (dates.lines.length) {
     // стрелка стоит справа на уровне дат — по правому краю даты заканчиваются перед ней
     const datesW = arrowOn(slide, L) && rowAlign(align) === 'right' ? ARROW_X - 40 - MARGIN : COL_W;
@@ -1081,9 +1215,18 @@ function renderEventCard(ctx, slide, env, L) {
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), BLACK);
-  drawPolaroidFrame(ctx, env);
-  const photo = drawPhotoQuad(ctx, env, POLAROID);
+  const f = frameOf(slide);
+  const pq = frameQuad(f, POLAROID.cx, POLAROID.cy, POLAROID);
+  drawPolaroidFrame(ctx, env, pq);
+  const photo = drawPhotoQuad(ctx, env, pq);
+  if (f) {
+    ctx.save();
+    ctx.translate(POLAROID.cx + f.x, POLAROID.cy + f.y);
+    ctx.scale(f.s, f.s);
+    ctx.translate(-POLAROID.cx, -POLAROID.cy);
+  }
   drawPaperClip(ctx);
+  if (f) ctx.restore();
 
   const colX = 796, colW = 554;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.event120, 'title', colW);
@@ -1110,11 +1253,14 @@ function renderEventCard(ctx, slide, env, L) {
   // описание под полароидом: сверху полосы, «снизу» — прижато к низу
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
   const bodyLimit = logoSpot(slide, L)[0] === 'b' ? CARD_BOTTOM : 1710;   // логотип внизу — описание над ним
-  const bodyTop = valign === 'bottom' ? bodyLimit - body.height : 1309;
+  // описание держится под рамкой: подвинули полароид — верх полосы едет за ним
+  const frameBottom = POLAROID.cy + POLAROID.h / 2 + POLAROID.bottom;
+  const bodyMin = f ? Math.max(LOGO_SAFE, 1309 + framePoint(f, POLAROID.cx, POLAROID.cy, 0, frameBottom)[1] - frameBottom) : 1309;
+  const bodyTop = valign === 'bottom' ? bodyLimit - body.height : bodyMin;
   drawBlock(ctx, body, 88, bodyTop, BLACK, align, alphaOf(body));
   const colOverflow = (real(title) || real(date) || real(place) || real(price)) &&
     (colTop < LOGO_SAFE || colTop + h > 1240);
-  const bodyOverflow = real(body) && (bodyTop < 1309 || bodyTop + body.height > bodyLimit);
+  const bodyOverflow = real(body) && (bodyTop < bodyMin || bodyTop + body.height > bodyLimit);
   return { overflow: colOverflow || bodyOverflow, photo };
 }
 
@@ -1269,6 +1415,91 @@ function renderReels(ctx, slide, env, L) {
 }
 
 /*
+ * Погода — сторис 1080×1920: дата, под ней две колонки — эмодзи погоды и
+ * «Утром / Днем / Вечером» с температурой, эмодзи денег и курсы валют.
+ * Подписи «Утром…» не редактируются; меняются дата, эмодзи, температура,
+ * знаки валют и курсы. Координаты — с готовых сторис (по центру слайда:
+ * верх даты 575, низ курсов 1402). Затемнение — ровное по всему фото.
+ */
+const WEATHER_ROWS = [['tMorn', 'Утром'], ['tDay', 'Днем'], ['tEve', 'Вечером']];
+const WEATHER_RATES = [['curA', 'rateA'], ['curB', 'rateB'], ['curC', 'rateC']];
+const WEATHER_LOGO = { x: 848, y: 119, w: 152, h: 130 };
+const WEATHER_DIM = 0.6;   // затемнение при 100 %
+
+/* Дата для сторис: «12 октября». */
+function ruDayMonth(d = new Date()) {
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+/* Температура: «12» → «+12», «-3» → «−3» (настоящий минус); с градусом,
+   словами и т. п. — как набрано. */
+function formatTemp(text) {
+  const t = text.trim();
+  const m = t.match(/^([+\-−–]?)\s*(\d+(?:[.,]\d+)?)$/);
+  if (!m) return text;
+  if (/^0+(?:[.,]0+)?$/.test(m[2])) return m[2];
+  return (m[1] && m[1] !== '+' ? '−' : '+') + m[2];
+}
+
+function renderWeather(ctx, slide, env, L) {
+  const { W, H } = L;
+  const valign = textVAlign(slide, L);
+  const sb = sizeScale(slide, 'body');
+  const day = fieldBlock(ctx, slide, env, L, 'day', T.wday168, 'title', 980);
+  const wicon = fieldBlock(ctx, slide, env, L, 'wicon', T.wicon150, 'body', 400);
+  const ficon = fieldBlock(ctx, slide, env, L, 'ficon', T.wicon150, 'body', 400);
+  const labels = WEATHER_ROWS.map(([, text]) => textBlock(ctx, text, T.wrow108, sb));
+  const space = (() => {
+    const b = labels[0];
+    ctx.save(); ctx.font = b.font; setTracking(ctx, b.track);
+    const w = measureTracked(ctx, ' ', b.track, b.stretch);
+    ctx.restore();
+    return w;
+  })();
+  const LEFT = 97, SYM_X = 637, SYM_W = 100, RATE_X = 762;
+  const temps = WEATHER_ROWS.map(([key], i) =>
+    fieldBlock(ctx, slide, env, L, key, T.wrow108, 'body', Math.max(60, 600 - labels[i].lines[0].width - space), formatTemp));
+  const syms = WEATHER_RATES.map(([key]) => fieldBlock(ctx, slide, env, L, key, T.wrate110, 'body', 200));
+  const rates = WEATHER_RATES.map(([, key]) => fieldBlock(ctx, slide, env, L, key, T.wrate110, 'body', W - RATE_X - 40));
+
+  // колонка: дата, эмодзи (центр — 257 ниже низа даты), три строки
+  // (прописные первой — 122 ниже центра эмодзи, курсы ещё на 12 ниже)
+  const lead = T.wrow108.lead * sb * leadScale(slide, 'body');
+  const iconC = day.height + 182 + 75 * sb;
+  const rowsTop = iconC + 75 * sb + 47;
+  const shift = 12 * sb;
+  const rowH = i => Math.max(temps[i].height, labels[i].height);
+  const h = rowsTop + 2 * lead + shift + Math.max(rowH(2), ...[syms[2], rates[2]].map(b => b.height));
+  const row = logoSpot(slide, L)[0];
+  const rTop = row === 't' ? 330 : 150, rBottom = row === 'b' ? 1500 : 1650;
+  // по умолчанию (по центру) — как в макете: середина колонки на 988
+  const top = placeIn(h, rTop, rBottom, valign, 575 + 827 / 2);
+
+  const photo = drawPhotoRect(ctx, env, 0, 0, W, H);
+  const dim = shadeStrength(slide, L) * WEATHER_DIM;
+  if (dim > 0) { ctx.fillStyle = `rgba(0, 0, 0, ${dim})`; ctx.fillRect(0, 0, W, H); }
+  drawLogo(ctx, env, logoBox(slide, L, WEATHER_LOGO), WHITE);
+
+  const color = ink(slide);
+  drawBlock(ctx, day, (W - 980) / 2, top, color, 'center', alphaOf(day));
+  // эмодзи: середина картинки ≈ на 0,35 кегля выше базовой линии
+  const iconTop = b => top + iconC + 0.35 * b.size - b.cap;
+  drawBlock(ctx, wicon, 216 - 200, iconTop(wicon), color, 'center', alphaOf(wicon));
+  drawBlock(ctx, ficon, 838 - 200, iconTop(ficon), color, 'center', alphaOf(ficon));
+  WEATHER_ROWS.forEach((_, i) => {
+    const y = top + rowsTop + i * lead;
+    drawBlock(ctx, labels[i], LEFT, y, color);
+    drawBlock(ctx, temps[i], LEFT + labels[i].lines[0].width + space, y, color, 'left', alphaOf(temps[i]));
+    drawBlock(ctx, syms[i], SYM_X, y + shift, color, 'center', alphaOf(syms[i]), SYM_W);
+    drawBlock(ctx, rates[i], RATE_X, y + shift, color, 'left', alphaOf(rates[i]));
+  });
+  const blocks = [day, wicon, ficon, ...temps, ...syms, ...rates];
+  const wide = [...temps, ...rates].some(b => real(b) && b.lines.length > 1) || (real(day) && day.lines.length > 1);
+  const overflow = blocks.some(real) && (wide || top < rTop || top + h > rBottom);
+  return { overflow, photo };
+}
+
+/*
  * Все макеты. fields — какие поля есть у слайда (порядок = порядок в форме),
  * photo — есть ли место под фото, shade — есть ли «тень» (затемнение),
  * arrow — 'on' (стрелка в макете есть) / 'off' (можно включить),
@@ -1276,7 +1507,9 @@ function renderReels(ctx, slide, env, L) {
  * align / valign — выравнивание и расположение текста в макете (их можно
  * поменять на слайде), plain — поля без жирного/курсива (шрифт без них),
  * logo — где логотип в макете (tr, если не указано; см. logoBox),
- * logoFrame — рамка для 8 точек логотипа, если не как у постов.
+ * logoFrame — рамка для 8 точек логотипа, если не как у постов,
+ * frame — у рамки под фото (стопка, полароид) можно менять место и размер
+ * (slide.opts.frame, см. frameOf); значение — подпись раздела в форме.
  */
 const POST = [1440, 1800];
 
@@ -1311,7 +1544,7 @@ const LAYOUTS = {
   },
   'fav-card': {
     name: 'Любимые места — карточка', short: 'Стопка фото', size: POST,
-    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top',
+    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top', frame: 'Стопка фото',
     ph: { body: 'Пара предложений о месте — почему его любят жители.' },
     render: renderFavoriteCard,
   },
@@ -1335,7 +1568,7 @@ const LAYOUTS = {
   },
   'ev-card': {
     name: 'Мероприятия — карточка', short: 'Событие', size: POST,
-    fields: ['title', 'date', 'place', 'price', 'body'], photo: true, align: 'left', valign: 'middle',
+    fields: ['title', 'date', 'place', 'price', 'body'], photo: true, align: 'left', valign: 'middle', frame: 'Полароид',
     ph: { title: 'Название\nсобытия', place: 'WE Kitchen', body: 'Описание события: что, где и почему стоит сходить.' },
     render: renderEventCard,
   },
@@ -1386,19 +1619,32 @@ const LAYOUTS = {
     ph: { title: 'Заголовок рилс в две-три строки' },
     render: renderReels,
   },
+  'weather': {
+    name: 'Погода — сторис', short: 'Погода', size: [1080, 1920],
+    fields: ['day', 'wicon', 'tMorn', 'tDay', 'tEve', 'ficon', 'curA', 'rateA', 'curB', 'rateB', 'curC', 'rateC'],
+    photo: true, shade: true, shadeDefault: 0.4, valign: 'middle', fixedAlign: true,
+    sizeKeys: { body: 'tMorn' },   // «Размер текста» в пунктах — по строкам погоды, не по эмодзи
+    logoFrame: { x0: 80, x1: 1000, y0: 119, y1: 1650 },
+    // при создании слайда: сегодняшняя дата, эмодзи и знаки валют как в макете
+    defaults: () => ({ day: ruDayMonth(), wicon: '☀️', ficon: '💵', curA: '$', curB: '€', curC: '₽' }),
+    ph: { day: () => ruDayMonth(), wicon: '☀️', ficon: '💵', tMorn: '+12', tDay: '+18', tEve: '+14',
+          curA: '$', curB: '€', curC: '₽', rateA: '87,45', rateB: '102,16', rateC: '1,046' },
+    render: renderWeather,
+  },
 };
 
 for (const [id, L] of Object.entries(LAYOUTS)) {
   L.id = id;
   L.W = L.size[0];
   L.H = L.size[1];
+  L.collab = L.H === 1800 && id.endsWith('-cover');   // коллаборация — только на обложках постов
 }
 
 /*
  * Рисует слайд. ctx уже отмасштабирован снаружи (setTransform) так, что
  * единица = пиксель макета; env.k — сколько пикселей устройства в единице
  * (нужно для теней, которые canvas не масштабирует).
- * env: { assets: {logoWhite, logoBlack, stack}, photo, transform, ghost, k }
+ * env: { assets: {logoWhite, logoBlack, logoMass, stack, partner(id)}, photo, transform, ghost, k }
  * Возвращает { overflow, photo, texts } — photo описывает область фото для
  * UI (перетаскивание кадра, кнопка «Добавить фото»), texts — где тексты
  * полей (правка нажатием на превью).

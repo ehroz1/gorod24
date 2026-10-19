@@ -60,7 +60,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `shade`, `arrow` (`'on'` = shown by default), `ph` (placeholders; may be a
   function of `env`, used for «02. Заголовок» numbering) and `render`.
   16 layouts = every frame of the Figma page (page `277:2` plus the
-  «Киноафиша» section `304:192`). Covers share `renderCover`
+  «Киноафиша» section `304:192`), plus `weather` (see below). Covers share `renderCover`
   (bottom-anchored stack: last baseline at y=1650, `gap` — 60 by default —
   between title and subtitle; `logo` overrides the logo box, e.g. the
   centred one on the Киноафиша cover). Киноафиша was built from Figma
@@ -69,6 +69,20 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Inter 42) and match the node positions within 1px, but colours — white
   text, white pill badge with black text — are assumptions; re-check them
   against a screenshot when the quota allows.
+- **Погода — сторис** (`weather`, 1080×1920, rubric `weather`): not in
+  Figma — measured from the owner's finished stories (date Bravo Pro 168,
+  rows 108 / track 4, rates 110, logo `WEATHER_LOGO`; the overlay matched
+  within ~1px). Fields `day wicon tMorn tDay tEve ficon curA rateA curB
+  rateB curC rateC` (letter suffixes, not digits — `baseKey` strips
+  digits); the «Утром / Днем / Вечером» labels are fixed text without a key.
+  `L.defaults()` fills today's date (`ruDayMonth`), emoji and $ € ₽ in
+  `newSlide` and on `changeLayout` (`fillDefaults`, empty keys only).
+  `formatTemp` adds «+» / real minus. Shade is a flat dim
+  (`WEATHER_DIM` × `shadeStrength`, `L.shadeDefault` 0.4); `fixedAlign`
+  hides the alignment control, valign moves the whole column (default
+  middle = the stories' position). Form: `buildWeatherFields` (compact
+  grid, «Сегодня / Завтра» and emoji chips `WEATHER_ICONS` /
+  `MONEY_ICONS`); quick edit uses the generic `buildField`.
 - Photos: `drawPhotoRect` / `drawPhotoQuad` (rotated slot, `bleed` hides the
   black placeholder edge) → `drawCover` = object-fit: cover with
   `transform {zoom, x, y}`; `x/y` are design units from centre, clamped so no
@@ -94,6 +108,13 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `BRAND_CREAM` (#FEF3BD) instead of white. Logos keep `WHITE`/`BLACK`
   (they pick the tinted asset), dark text on plates stays black. New
   layouts must use `ink()`/`paper()` rather than `WHITE` for those roles.
+- **Frame position** (`L.frame` = section title, on fav-card and ev-card):
+  `slide.opts.frame = {x, y, s}` moves/scales the photo-stack bitmap or the
+  polaroid (+ paper clip) around its centre (`frameOf`, `framePoint`,
+  `frameQuad`; limits `FRAME_SHIFT_MAX`, `FRAME_SCALE_*`). The returned
+  photo quad is the moved one, so drags/hit-tests just work. Text strip
+  under the frame follows its bottom edge (fav-card text, ev-card body);
+  unset → pixel-identical to the Figma layout. UI: `buildFrameSection`.
 - **Optional lines**: fields with `optional: true` in `FIELD_INFO`
   (date, place, price, address, badge) get an on/off switch in the form;
   `slide.opts.hidden[key]` makes `fieldText()` return nothing (no text, no
@@ -138,6 +159,25 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   Strip layouts apply the same rule locally (com-top/com-bottom, fav-card,
   ev-card body); com-* pick a white logo over the photo band and black over
   the white part.
+- **Collaboration** (`slide.opts.collab` = partner id; only post covers —
+  `L.collab`, set in the `LAYOUTS` loop for `*-cover` at 1800 high):
+  `drawCoverLogo` (renderCover, renderEventsCover) draws «our logo | line |
+  partner» instead of the single logo, following the co-branding page of
+  the WE media group brand kit (`ehroz1/wemedia-group-branding`,
+  `assets/guides/edubridge-guide.pdf`, «05 · Ко-брендинг»): ours first,
+  line `COLLAB_LINE` = 3 units, 1× our height (guide says 1.5×, owner
+  found it too long), gaps 2X (X = 11 % of our width), both logos scaled to
+  75 % of the single logo (`COLLAB_SCALE`), partner balanced by optical mass (bbox area × √ink density,
+  `inkMass`) and clamped to ≤1.6× our height (`COLLAB_*`), same colour
+  for both. The row keeps our logo's vertical centre and the spot's edge,
+  so default opts stay pixel-identical and text regions are unchanged.
+  Partners in `app.js`: bundled = `brand/partners/*.svg` (white versions,
+  explicit width/height added) listed in `partners.json` → `build.py` →
+  `BUNDLED_PARTNERS`; user uploads in IndexedDB `partner/<id>` = `{name,
+  blob}`. `logoMask()` turns any image into a white mask (opaque images:
+  difference from the corner colour), `env.assets.partner(id)` →
+  `{white, black, mass, preview}`; an id missing on this device draws only
+  our logo. UI: «Коллаборация» row in «Оформление» → `openCollabSheet()`.
 - **Bold / italic / colour inside a field**: `slide.fmt[key] = [[len, flags], …]`
   (run lengths covering the whole text; flags `BOLD` 1, `ITALIC` 2 — the
   `STYLE_BITS` that pick a font face — plus `RED` 4 (`ACCENT_RED` #700004),
@@ -153,6 +193,13 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   normalized text + per-char flags and measures per style (`measureSlice`,
   `b.fonts[flags]`); lines carry `flags` and `last`; plain lines still go
   through the single `fillText` fast path.
+- **Size and line spacing**: `slide.size = {title, body, titleLead,
+  bodyLead}` — multipliers to the layout (`sizeScale`, `leadScale`;
+  `fieldBlock` applies the lead via `withLead`). The form shows them in
+  design points (`buildSizeRows`): `groupMetrics` renders the slide with
+  `noText` and takes `size`/`lead` of the group's main text from
+  `res.texts` (`title`/`body` key, `L.sizeKeys`, else the first field of
+  the group). Title-type rich fields have no hint line under them.
 - `env.noText`: everything except text (blocks are still measured and
   recorded in `res.texts`) — the background under each text, used by the
   contrast check.
@@ -173,7 +220,7 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
 Families: `G24Title` (Bravo Pro), `G24Display` (Nauryz Red Keds), `G24Body`
 (Inter 4.0: 400 and 700, normal and italic — `body*.ttf`, the 700 faces are
 for bold/italic inside fields). `build.py` embeds `brand/fonts/title.*`
-(Bravo_Pro.otf; replaced BravoRG — same metrics and advance widths, adds Ҷҷ Əə ₸) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
+(Bravo Pro 1.101 — replaced BravoRG, same metrics and advance widths, adds Ҷҷ Əə ₸; 1.101 only fixes the orientation of the schwa glyphs Ә ә Ə ə) / `display.*` (NauryzRedKeds.ttf) — both supplied by the owner
 and committed — and falls back to `fallback-title.ttf` (Oswald Light) /
 `fallback-display.ttf` (Unbounded SemiBold) only if they are missing; it emits
 `BUNDLED_FONTS = {title, display}` booleans (false → the app shows a «нет
@@ -203,7 +250,8 @@ against the Figma screenshots and matches (line breaks differ only where
   bodyN → mode `'full'`; `'color'` for title, label and `layout.plain`
   fields → colour and marker only, no Ж/К, ⌘B/⌘I ignored): a
   `contenteditable` div instead of a textarea (`buildRichField`) with
-  «Ж / К / red / cream / marker «А» / Обычный» buttons (`execCommand`
+  «Ж / К / red / cream / marker «А»» buttons — no «Обычный», a second press
+  toggles off (`execCommand`
   bold/italic, `foreColor`/`hiliteColor` with `styleWithCSS`,
   removeFormat; colours in the editor are UI proxies `UI_RED`/`UI_CREAM`/
   `UI_MARK`, `readRich.flagsOf` maps computed colours back to flags; the
@@ -221,7 +269,7 @@ against the Figma screenshots and matches (line breaks differ only where
   (a label would forward clicks to the first button).
 - **Selection popup** (touch only, `isTouch()`): the OS text-selection menu
   (Cut/Copy/Paste) can't be extended from a web page and covers the
-  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · Обычный»
+  label-row buttons, so `placeFmtPopup()` shows a fixed «Ж · К · colours · marker»
   bar (`.fmt-pop`, one global element) below a non-collapsed selection in a
   rich field — `POPUP_BELOW` leaves room for the selection handles; if it
   doesn't fit above the keyboard it goes `POPUP_ABOVE` the selection (over
@@ -250,9 +298,10 @@ against the Figma screenshots and matches (line breaks differ only where
   screen only — deliberately not in the editor): pick a rubric
   (`MAGIC_RUBRICS`), paste text (rich, so bold headings from Docs survive),
   `parseCarouselText(text, runs, rubricId, opts)` → `{cover, items}`:
-  `magicItemsFrom` splits on numbered/bulleted/bold/«?»-question heads or
-  blank lines; the first block becomes the cover (heuristics for a short
-  title + subtitle); per rubric `RE` patterns pull 📍 addresses
+  `magicBlocks` splits **only** on two blank lines in a row or a line
+  starting with `//` (text after it opens the next card; single blank lines
+  stay inside a card as paragraphs); the first block becomes the cover,
+  a card's first line its title (`cutLead` strips «1.»); per rubric `RE` patterns pull 📍 addresses
   (`looksAddress`: keyword + digit), dates, places, prices, «Премьера:»
   badges; int numbers titles «01. …» (`opts.number`). Word boundaries are
   `W0`/`W1` with `\p{L}` — **no `\b` (ASCII-only) and no lookbehind** (iOS
