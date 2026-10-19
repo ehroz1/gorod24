@@ -94,6 +94,13 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   `BRAND_CREAM` (#FEF3BD) instead of white. Logos keep `WHITE`/`BLACK`
   (they pick the tinted asset), dark text on plates stays black. New
   layouts must use `ink()`/`paper()` rather than `WHITE` for those roles.
+- **Frame position** (`L.frame` = section title, on fav-card and ev-card):
+  `slide.opts.frame = {x, y, s}` moves/scales the photo-stack bitmap or the
+  polaroid (+ paper clip) around its centre (`frameOf`, `framePoint`,
+  `frameQuad`; limits `FRAME_SHIFT_MAX`, `FRAME_SCALE_*`). The returned
+  photo quad is the moved one, so drags/hit-tests just work. Text strip
+  under the frame follows its bottom edge (fav-card text, ev-card body);
+  unset → pixel-identical to the Figma layout. UI: `buildFrameSection`.
 - **Optional lines**: fields with `optional: true` in `FIELD_INFO`
   (date, place, price, address, badge) get an on/off switch in the form;
   `slide.opts.hidden[key]` makes `fieldText()` return nothing (no text, no

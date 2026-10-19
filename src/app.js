@@ -3135,6 +3135,8 @@ function buildSlideForm() {
 
   // фото
   if (L.photo) root.append(buildPhotoSection(slide));
+  // место и размер рамки под фото (стопка, полароид)
+  if (L.frame) root.append(buildFrameSection(slide, L));
 
   // оформление
   const look = [];
@@ -3232,6 +3234,35 @@ function buildPhotoSection(slide) {
     rows.push(h('p', { class: 'field-hint photo-hint', style: 'margin-top:10px', text: 'Можно выбрать сразу несколько — разложатся по слайдам, лишним добавятся новые карточки.' }));
   }
   return section(video ? 'Видео' : 'Фото или видео', m ? btn('btn btn-ghost btn-sm', null, 'Сбросить кадр', () => resetFrame()) : null, ...rows);
+}
+
+/* Где стоит рамка под фото (стопка, полароид) и какого она размера:
+   slide.opts.frame = {x, y, s}; всё по нулям — настройку убираем. */
+function setFrame(key, value) {
+  const slide = currentSlide();
+  pushUndo('frame-pos:' + slide.id);
+  const f = Object.assign({ x: 0, y: 0, s: 1 }, slide.opts.frame, { [key]: value });
+  if (!f.x && !f.y && f.s === 1) delete slide.opts.frame;
+  else slide.opts.frame = f;
+  scheduleRender();
+  scheduleSave();
+}
+
+function buildFrameSection(slide, L) {
+  const f = frameOf(slide) || { x: 0, y: 0, s: 1 };
+  const rows = [
+    rangeRow('Вбок', { min: -FRAME_SHIFT_MAX, max: FRAME_SHIFT_MAX, step: 5, value: Math.round(f.x), key: 'frame-x',
+      onInput: v => setFrame('x', v), onChange: () => renderPanel() }),
+    rangeRow('Вверх-вниз', { min: -FRAME_SHIFT_MAX, max: FRAME_SHIFT_MAX, step: 5, value: Math.round(f.y), key: 'frame-y',
+      onInput: v => setFrame('y', v), onChange: () => renderPanel() }),
+    rangeRow('Размер', { min: FRAME_SCALE_MIN * 100, max: FRAME_SCALE_MAX * 100, value: Math.round(f.s * 100), unit: '%', key: 'frame-s',
+      onInput: v => setFrame('s', v / 100), onChange: () => renderPanel() }),
+    h('p', { class: 'field-hint', text: 'Текст под рамкой едет вместе с ней.' }),
+  ];
+  const reset = slide.opts.frame ? btn('btn btn-ghost btn-sm', null, 'Как в макете', () => {
+    pushUndo(); delete slide.opts.frame; commit({ panel: true });
+  }) : null;
+  return section(L.frame, reset, ...rows);
 }
 
 /* Начало и конец фрагмента: два ползунка с шагом 0,1 с. Пока тянешь —
@@ -4061,6 +4092,7 @@ function openHelp() {
       <li>Там же (и в заголовках) — красный и кремовый цвет слов и маркер «А»: кремовая плашка под словами. Повторное нажатие снимает, «Обычный» — снимает всё.</li>
       <li>Текст, скопированный из Заметок, Google Docs, Word или с сайта, вставляется с жирным и курсивом, остальное оформление отбрасывается.</li>
       <li>«Оформление → Выравнивание»: по левому краю, по центру, по правому, по ширине. «Расположение»: сверху, по центру, снизу. Изначально — как в макете; «Так же на всех слайдах» применит выбор ко всей карусели.</li>
+      <li>«Стопка фото» / «Полароид» (карточки «Любимых мест» и «Мероприятий»): ползунки двигают рамку под фото вбок и вверх-вниз и меняют её размер; текст под рамкой едет за ней. «Как в макете» — вернуть на место.</li>
       <li>«Оформление → Логотип»: нажмите одну из 8 точек на схеме — углы или середины сторон. Текст сам отодвигается, чтобы не наезжать на логотип.</li>
       <li>На телефоне при выделении текста под ним всплывает панель «Ж · К · Обычный» и цвета.</li>
     </ul>

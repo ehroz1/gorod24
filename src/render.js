@@ -651,13 +651,45 @@ function drawPhotoQuad(ctx, env, q, fallback = BLACK) {
 const STACK = { x: 182.63, y: 382.83, w: 1069.46, h: 802.6 };
 const STACK_PHOTO = { cx: 760.1, cy: 784.6, w: 865.43, h: 593.76, deg: 5.65, bleed: 2 };
 
+/* Сдвиг и размер рамки под фото (стопка, полароид) на слайде:
+   slide.opts.frame = {x, y, s} — смещение в единицах макета и масштаб вокруг
+   центра рамки. Пусто / нули — как в макете (код рисует ровно то же, что раньше). */
+const FRAME_SHIFT_MAX = 600;
+const FRAME_SCALE_MIN = 0.6, FRAME_SCALE_MAX = 1.3;
+
+function frameOf(slide) {
+  const f = slide.opts && slide.opts.frame;
+  if (!f) return null;
+  const lim = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
+  const x = lim(f.x, -FRAME_SHIFT_MAX, FRAME_SHIFT_MAX);
+  const y = lim(f.y, -FRAME_SHIFT_MAX, FRAME_SHIFT_MAX);
+  const s = f.s == null ? 1 : lim(f.s, FRAME_SCALE_MIN, FRAME_SCALE_MAX);
+  return x || y || s !== 1 ? { x, y, s } : null;
+}
+
+/* Точка макета (px, py) после сдвига рамки с центром (cx, cy). */
+function framePoint(f, cx, cy, px, py) {
+  return f ? [cx + (px - cx) * f.s + f.x, cy + (py - cy) * f.s + f.y] : [px, py];
+}
+
+/* Повёрнутая область фото после сдвига рамки (размеры и поля — с масштабом). */
+function frameQuad(f, cx, cy, q) {
+  if (!f) return q;
+  const [x, y] = framePoint(f, cx, cy, q.cx, q.cy);
+  const out = Object.assign({}, q, { cx: x, cy: y, w: q.w * f.s, h: q.h * f.s });
+  for (const k of ['side', 'top', 'bottom']) if (k in q) out[k] = q[k] * f.s;
+  return out;
+}
+
+const STACK_CX = STACK.x + STACK.w / 2, STACK_CY = STACK.y + STACK.h / 2;
+const STACK_TEXT_GAP = 1268 - (STACK.y + STACK.h);   // от низа стопки до текста
+
 // Полароид мероприятий: фото 627×688 повёрнуто на 0,97°, вокруг рамка
 // (#FCFCFC, поля 26 / 47 сверху / 131 снизу) с мягкой тенью вверх-вправо.
 const POLAROID = { cx: 407.4, cy: 641.2, w: 627.62, h: 687.87, deg: 0.97, bleed: 0.5,
                    side: 26, top: 47, bottom: 131 };
 
-function drawPolaroidFrame(ctx, env) {
-  const q = POLAROID;
+function drawPolaroidFrame(ctx, env, q = POLAROID) {
   const k = env.k || 1;
   ctx.save();
   ctx.translate(q.cx, q.cy);
@@ -967,16 +999,23 @@ function renderFavoriteCard(ctx, slide, env, L) {
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, logoBox(slide, L, { x: 1198, y: 149, w: 152, h: 130 }), BLACK);
-  if (env.assets.stack) ctx.drawImage(env.assets.stack, STACK.x, STACK.y, STACK.w, STACK.h);
-  const photo = drawPhotoQuad(ctx, env, STACK_PHOTO, env.assets.stack ? null : BLACK);
+  const f = frameOf(slide);
+  if (env.assets.stack) {
+    const [x, y] = framePoint(f, STACK_CX, STACK_CY, STACK.x, STACK.y);
+    const s = f ? f.s : 1;
+    ctx.drawImage(env.assets.stack, x, y, STACK.w * s, STACK.h * s);
+  }
+  const photo = drawPhotoQuad(ctx, env, frameQuad(f, STACK_CX, STACK_CY, STACK_PHOTO), env.assets.stack ? null : BLACK);
   if (arrowOn(slide, L)) drawArrow(ctx, BLACK);
   const maxW = 1253;
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
   const logoBelow = logoSpot(slide, L)[0] === 'b';
-  const top = placeIn(body.height, 1268, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
+  // текст — под стопкой: подвинули стопку — полоса текста едет за ней
+  const textTop = f ? Math.max(LOGO_SAFE, framePoint(f, STACK_CX, STACK_CY, 0, STACK.y + STACK.h)[1] + STACK_TEXT_GAP) : 1268;
+  const top = placeIn(body.height, textTop, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
   drawBlock(ctx, body, (W - maxW) / 2, top, BLACK, align, alphaOf(body));
   // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
-  return { overflow: real(body) && (top < 1268 || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
+  return { overflow: real(body) && (top < textTop || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
@@ -1081,9 +1120,18 @@ function renderEventCard(ctx, slide, env, L) {
   ctx.fillStyle = paper(slide); ctx.fillRect(0, 0, W, H);
   drawGrid(ctx);
   drawLogo(ctx, env, logoBox(slide, L, LOGO_BOX), BLACK);
-  drawPolaroidFrame(ctx, env);
-  const photo = drawPhotoQuad(ctx, env, POLAROID);
+  const f = frameOf(slide);
+  const pq = frameQuad(f, POLAROID.cx, POLAROID.cy, POLAROID);
+  drawPolaroidFrame(ctx, env, pq);
+  const photo = drawPhotoQuad(ctx, env, pq);
+  if (f) {
+    ctx.save();
+    ctx.translate(POLAROID.cx + f.x, POLAROID.cy + f.y);
+    ctx.scale(f.s, f.s);
+    ctx.translate(-POLAROID.cx, -POLAROID.cy);
+  }
   drawPaperClip(ctx);
+  if (f) ctx.restore();
 
   const colX = 796, colW = 554;
   const title = fieldBlock(ctx, slide, env, L, 'title', T.event120, 'title', colW);
@@ -1110,11 +1158,14 @@ function renderEventCard(ctx, slide, env, L) {
   // описание под полароидом: сверху полосы, «снизу» — прижато к низу
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body50t, 'body', 1217);
   const bodyLimit = logoSpot(slide, L)[0] === 'b' ? CARD_BOTTOM : 1710;   // логотип внизу — описание над ним
-  const bodyTop = valign === 'bottom' ? bodyLimit - body.height : 1309;
+  // описание держится под рамкой: подвинули полароид — верх полосы едет за ним
+  const frameBottom = POLAROID.cy + POLAROID.h / 2 + POLAROID.bottom;
+  const bodyMin = f ? Math.max(LOGO_SAFE, 1309 + framePoint(f, POLAROID.cx, POLAROID.cy, 0, frameBottom)[1] - frameBottom) : 1309;
+  const bodyTop = valign === 'bottom' ? bodyLimit - body.height : bodyMin;
   drawBlock(ctx, body, 88, bodyTop, BLACK, align, alphaOf(body));
   const colOverflow = (real(title) || real(date) || real(place) || real(price)) &&
     (colTop < LOGO_SAFE || colTop + h > 1240);
-  const bodyOverflow = real(body) && (bodyTop < 1309 || bodyTop + body.height > bodyLimit);
+  const bodyOverflow = real(body) && (bodyTop < bodyMin || bodyTop + body.height > bodyLimit);
   return { overflow: colOverflow || bodyOverflow, photo };
 }
 
@@ -1276,7 +1327,9 @@ function renderReels(ctx, slide, env, L) {
  * align / valign — выравнивание и расположение текста в макете (их можно
  * поменять на слайде), plain — поля без жирного/курсива (шрифт без них),
  * logo — где логотип в макете (tr, если не указано; см. logoBox),
- * logoFrame — рамка для 8 точек логотипа, если не как у постов.
+ * logoFrame — рамка для 8 точек логотипа, если не как у постов,
+ * frame — у рамки под фото (стопка, полароид) можно менять место и размер
+ * (slide.opts.frame, см. frameOf); значение — подпись раздела в форме.
  */
 const POST = [1440, 1800];
 
@@ -1311,7 +1364,7 @@ const LAYOUTS = {
   },
   'fav-card': {
     name: 'Любимые места — карточка', short: 'Стопка фото', size: POST,
-    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top',
+    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top', frame: 'Стопка фото',
     ph: { body: 'Пара предложений о месте — почему его любят жители.' },
     render: renderFavoriteCard,
   },
@@ -1335,7 +1388,7 @@ const LAYOUTS = {
   },
   'ev-card': {
     name: 'Мероприятия — карточка', short: 'Событие', size: POST,
-    fields: ['title', 'date', 'place', 'price', 'body'], photo: true, align: 'left', valign: 'middle',
+    fields: ['title', 'date', 'place', 'price', 'body'], photo: true, align: 'left', valign: 'middle', frame: 'Полароид',
     ph: { title: 'Название\nсобытия', place: 'WE Kitchen', body: 'Описание события: что, где и почему стоит сходить.' },
     render: renderEventCard,
   },
