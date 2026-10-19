@@ -362,6 +362,10 @@ against the Figma screenshots and matches (line breaks differ only where
   shares the already-built files. Also ZIP (store-only `buildZip`), single
   files, clipboard. File names are ASCII (`fileSlug` transliteration) —
   Chromium renames Cyrillic downloads to «download».
+  Exported PNG/JPEG get a hidden `[gorod24]` tag (`tagImage`: PNG tEXt
+  Software/Description + XMP iTXt; JPEG EXIF ImageDescription/Software +
+  XMP APP1) so the Mac «Свойства» show where the image came from; not
+  shown anywhere in the UI. Videos and clipboard are not tagged.
 - **Stories 9:16** (export sheet «Пост 4:5 / Сторис 9:16», `state.exportStory`,
   reset each time the sheet opens): post slides (`isPostSlide`, W 1440) →
   1080×1920, the slide rendered at 960 wide (`renderExport(…, width)`) as a

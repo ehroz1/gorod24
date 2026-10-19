@@ -3768,7 +3768,7 @@ async function buildFiles(only, onProgress) {
       if (isVideoSlide(slide)) videoSkipped++;
       const story = storyMode(slide);
       const canvas = story ? await renderStoryExport(slide, i) : await renderExport(slide, i);
-      const blob = await canvasToBlob(canvas, mime, 0.95);
+      const blob = await tagImage(await canvasToBlob(canvas, mime, 0.95));
       canvas.width = canvas.height = 0;
       if (blob) files.push(new File([blob], exportName(i, ext, story ? '-story' : ''), { type: mime }));
     }
@@ -3778,6 +3778,88 @@ async function buildFiles(only, onProgress) {
   }
   if (videoSkipped) say('Этот браузер не умеет записывать видео — видео-слайды сохранены картинкой. Откройте в Chrome или Safari', 7000);
   return files;
+}
+
+/*
+ * Метка конструктора в метаданных экспортированных картинок — видна в
+ * «Свойствах» на Mac (Finder → Свойства, Просмотр → Инспектор), в интерфейсе
+ * нигде не показывается. PNG: tEXt Software/Description + XMP (iTXt);
+ * JPEG: EXIF (ImageDescription, Software) + XMP (APP1) сразу после JFIF.
+ * Если формат не распознан — файл возвращается как есть.
+ */
+const EXPORT_TAG = '[gorod24]';
+const XMP_PACKET = '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+  + '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+  + '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/">'
+  + `<xmp:CreatorTool>${EXPORT_TAG}</xmp:CreatorTool>`
+  + `<dc:description><rdf:Alt><rdf:li xml:lang="x-default">${EXPORT_TAG}</rdf:li></rdf:Alt></dc:description>`
+  + '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>';
+
+function joinBytes(parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+function pngChunk(type, data) {
+  const body = joinBytes([new TextEncoder().encode(type), data]);
+  const out = new Uint8Array(body.length + 8);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length);
+  out.set(body, 4);
+  dv.setUint32(body.length + 4, crc32(body));
+  return out;
+}
+
+function jpegSegment(marker, data) {
+  const out = new Uint8Array(data.length + 4);
+  out[0] = 0xFF; out[1] = marker;
+  new DataView(out.buffer).setUint16(2, data.length + 2);
+  out.set(data, 4);
+  return out;
+}
+
+/* EXIF: TIFF big-endian, IFD0 с двумя ASCII-тегами (0x010E ImageDescription, 0x0131 Software). */
+function exifBytes(text) {
+  const str = new TextEncoder().encode(text + '\0');
+  const tags = [0x010E, 0x0131];
+  const ifdSize = 2 + tags.length * 12 + 4;
+  const tiff = new Uint8Array(8 + ifdSize + str.length * tags.length);
+  const dv = new DataView(tiff.buffer);
+  tiff.set([0x4D, 0x4D, 0, 42, 0, 0, 0, 8]);
+  dv.setUint16(8, tags.length);
+  tags.forEach((tag, i) => {
+    const at = 10 + i * 12, data = 8 + ifdSize + i * str.length;
+    dv.setUint16(at, tag);
+    dv.setUint16(at + 2, 2);
+    dv.setUint32(at + 4, str.length);
+    dv.setUint32(at + 8, data);
+    tiff.set(str, data);
+  });
+  return joinBytes([new TextEncoder().encode('Exif\0\0'), tiff]);
+}
+
+async function tagImage(blob) {
+  if (!blob) return blob;
+  try {
+    const src = new Uint8Array(await blob.arrayBuffer());
+    const enc = new TextEncoder();
+    if (blob.type === 'image/png' && src[1] === 0x50 && src[12] === 0x49 && src[15] === 0x52) {
+      const ihdrEnd = 8 + 12 + new DataView(src.buffer).getUint32(8);
+      const text = (k, v) => pngChunk('tEXt', joinBytes([enc.encode(k), new Uint8Array(1), enc.encode(v)]));
+      const xmp = pngChunk('iTXt', joinBytes([enc.encode('XML:com.adobe.xmp'), new Uint8Array(5), enc.encode(XMP_PACKET)]));
+      return new Blob([src.subarray(0, ihdrEnd), text('Software', EXPORT_TAG), text('Description', EXPORT_TAG), xmp, src.subarray(ihdrEnd)], { type: blob.type });
+    }
+    if (blob.type === 'image/jpeg' && src[0] === 0xFF && src[1] === 0xD8) {
+      let at = 2;
+      if (src[2] === 0xFF && src[3] === 0xE0) at = 4 + ((src[4] << 8) | src[5]);
+      const exif = jpegSegment(0xE1, exifBytes(EXPORT_TAG));
+      const xmp = jpegSegment(0xE1, joinBytes([enc.encode('http://ns.adobe.com/xap/1.0/\0'), enc.encode(XMP_PACKET)]));
+      return new Blob([src.subarray(0, at), exif, xmp, src.subarray(at)], { type: blob.type });
+    }
+  } catch { /* метка не обязательна */ }
+  return blob;
 }
 
 /* ZIP без сжатия (store): PNG/JPG и так сжаты, а store — это пара десятков строк без библиотек. */
