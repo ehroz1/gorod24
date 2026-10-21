@@ -98,7 +98,7 @@ const FIELD_LABELS = {
   'int-card': { title: 'Вопрос или заголовок', body: 'Ответ' },
   'new-card': { title: 'Название заведения', body: 'Описание (белая плашка)' },
   'ev-card': { title: 'Название события', body: 'Описание' },
-  'fav-card': { body: 'Текст под фото' },
+  'fav-card': { title: 'Заголовок (если нужен)', body: 'Текст под фото' },
   'kino-card': { title: 'Название фильма', body: 'Описание' },
 };
 
@@ -4704,13 +4704,8 @@ function parseCarouselText(text, runs, rubricId, opts = {}) {
       if (addr) card.fields.address = addr.replace(/^\s*адрес[:\s]*/i, '');
       setRichValue(card, 'body', joinLines(rest));
     } else if (rubricId === 'fav') {
-      // у карточки «Любимых мест» только текст — название первой строкой, жирным
-      const body = joinLines(rest);
-      if (title) {
-        const t = { text: title + (body.text ? '\n' + body.text : ''),
-          flags: [...Array(title.length).fill(BOLD), ...(body.text ? [0, ...body.flags] : [])] };
-        setRichValue(card, 'body', t);
-      } else setRichValue(card, 'body', body);
+      card.fields.title = title;
+      setRichValue(card, 'body', joinLines(rest));
     } else if (rubricId === 'ev') {
       card.fields.title = title;
       const date = take(RE.date, 60);

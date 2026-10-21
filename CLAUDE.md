@@ -115,6 +115,10 @@ Three plain scripts concatenated into one `<script>` (shared globals, order:
   photo quad is the moved one, so drags/hit-tests just work. Text strip
   under the frame follows its bottom edge (fav-card text, ev-card body);
   unset → pixel-identical to the Figma layout. UI: `buildFrameSection`.
+- **fav-card title**: optional `title` (Bravo `T.card120`, `FAV_TITLE_GAP`
+  above the body), not in Figma — rendered with `ghost: false`, so an empty
+  title draws nothing and default cards stay pixel-identical; the magic
+  parser puts the card's first line there.
 - **Optional lines**: fields with `optional: true` in `FIELD_INFO`
   (date, place, price, address, badge) get an on/off switch in the form;
   `slide.opts.hidden[key]` makes `fieldText()` return nothing (no text, no

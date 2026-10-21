@@ -1088,6 +1088,8 @@ function renderInterviewCard(ctx, slide, env, L) {
 
 /* Любимые места — карточка: стопка фотографий, под ней текст (по центру),
    стрелка. Расположение — внутри полосы под стопкой. */
+const FAV_TITLE_GAP = 50;   // от заголовка до текста под стопкой
+
 function renderFavoriteCard(ctx, slide, env, L) {
   const { W, H } = L;
   const align = textAlign(slide, L), valign = textVAlign(slide, L);
@@ -1103,14 +1105,21 @@ function renderFavoriteCard(ctx, slide, env, L) {
   const photo = drawPhotoQuad(ctx, env, frameQuad(f, STACK_CX, STACK_CY, STACK_PHOTO), env.assets.stack ? null : BLACK);
   if (arrowOn(slide, L)) drawArrow(ctx, BLACK);
   const maxW = 1253;
+  // заголовок необязательный (в макете его нет): пустой не рисуется даже
+  // подсказкой, чтобы карточка без него выглядела ровно как в макете
+  const title = fieldBlock(ctx, slide, Object.assign({}, env, { ghost: false }), L, 'title', T.card120, 'title', maxW);
   const body = fieldBlock(ctx, slide, env, L, 'body', T.body45, 'body', maxW);
+  const items = [{ block: title }, { block: body, gapAbove: FAV_TITLE_GAP }];
+  const h = stackDown(items, 0);
   const logoBelow = logoSpot(slide, L)[0] === 'b';
   // текст — под стопкой: подвинули стопку — полоса текста едет за ней
   const textTop = f ? Math.max(LOGO_SAFE, framePoint(f, STACK_CX, STACK_CY, 0, STACK.y + STACK.h)[1] + STACK_TEXT_GAP) : 1268;
-  const top = placeIn(body.height, textTop, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
-  drawBlock(ctx, body, (W - maxW) / 2, top, BLACK, align, alphaOf(body));
+  const top = placeIn(h, textTop, logoBelow ? CARD_BOTTOM : COVER_BOTTOM, valign);
+  stackDown(items, top);
+  drawBlock(ctx, title, (W - maxW) / 2, items[0].top, BLACK, align, alphaOf(title));
+  drawBlock(ctx, body, (W - maxW) / 2, items[1].top, BLACK, align, alphaOf(body));
   // последняя строка может заходить на уровень стрелки (центрирована, обычно короткая)
-  return { overflow: real(body) && (top < textTop || top + body.height > (logoBelow ? CARD_BOTTOM : 1700)), photo };
+  return { overflow: (real(title) || real(body)) && (top < textTop || top + h > (logoBelow ? CARD_BOTTOM : 1700)), photo };
 }
 
 /* Новые места — карточка: фото, тень, название, адрес и белая плашка
@@ -1544,8 +1553,8 @@ const LAYOUTS = {
   },
   'fav-card': {
     name: 'Любимые места — карточка', short: 'Стопка фото', size: POST,
-    fields: ['body'], photo: true, arrow: 'on', align: 'center', valign: 'top', frame: 'Стопка фото',
-    ph: { body: 'Пара предложений о месте — почему его любят жители.' },
+    fields: ['title', 'body'], photo: true, arrow: 'on', align: 'center', valign: 'top', frame: 'Стопка фото',
+    ph: { title: 'Название места', body: 'Пара предложений о месте — почему его любят жители.' },
     render: renderFavoriteCard,
   },
   'new-cover': {
